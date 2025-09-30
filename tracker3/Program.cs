@@ -20,6 +20,11 @@ namespace Tracker.nn
     // --- Core Processor for CQH-TED Associative Memory ---
     public class MainProcessor
     {
+
+        public IEnumerable<int> GetRecognizedPatternSums()
+        {
+            return AssociativeMemory.Keys.Where(k => k > 0);
+        }
         public List<IO> inputseries = new List<IO>();
         public List<IO> outputseries = new List<IO>();
 
@@ -421,6 +426,7 @@ namespace Tracker
         /// <summary>
         /// Main asynchronous tracking and reverse engineering loop.
         /// </summary>
+        public Dictionary<int,int> patternSumOccurrences = new Dictionary<int, int>();
         public async Task ContinuousReverseEngineeringLoopAsync(CancellationToken token)
         {
             Console.WriteLine($"\n--- CQH-TED Engine START (N={WORD_LIMIT_N} Constraint) ---");
@@ -457,7 +463,11 @@ namespace Tracker
                         int newid = IdManager.GetId();
                         stringToIdMapping[word] = newid;
                         totalPattern.patternsequence.Add(newid);
-                        Console.WriteLine($"[TRACK] Added Word '{word}' (ID: {newid})");
+                        //Console.WriteLine($"[TRACK] Added Word '{word}' (ID: {newid})");
+                        int sum = newid; // oder Summe der IDs für komplexere Patterns
+                        if (!patternSumOccurrences.ContainsKey(sum))
+                            patternSumOccurrences[sum] = 0;
+                        patternSumOccurrences[sum]++;
                     }
 
                     // 2. L_exploit Synthesis (Conversation Tree Logic)
@@ -556,10 +566,8 @@ namespace Tracker
 
                         Console.WriteLine($"[P{partnerId}] Stored Unique Pattern Sums: {patternCount}");
                     }
-                    Console.WriteLine("-----------------------------------------------------");
 
-
-                    // 5. Generative Self-Test (NN Generation Mode)
+                    // Nach T_DIAG Diagnosis und Partner Specialization Summary
                     nn.MainProcessor generator = null;
                     int partnerToTest = -1;
 
@@ -574,35 +582,146 @@ namespace Tracker
                         }
                     }
 
-                    if (generator != null)
+                    // --- Ergänzung im Generative Self-Test (NN Generation Mode) ---
+                    if (generator != null && patternSumOccurrences.Count > 0)
                     {
-                        Console.WriteLine($"\n--- Generative Self-Test (Partner {partnerToTest}) ---");
-                        // Generate a pattern from a *subspace* of possible patterns (now using max optimality)
-                        nn.IO generatedPattern = generator.GenerateKnownPattern(partnerToTest);
+                        // Finde die am häufigsten vorkommende Pattern-Summe (repeating pattern)
+                        var mostRepeated = patternSumOccurrences
+                            .Where(kvp => kvp.Value > 1)
+                            .OrderByDescending(kvp => kvp.Value)
+                            .FirstOrDefault();
 
-                        // Test the generated pattern against its own memory (Self-Test)
-                        int matchCount = generator.GetPossibilitySpaceCount(generatedPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
-                        int generatedSum = generatedPattern.IOVECTOR.Where(id => id > 0).Sum();
-
-                        Console.Write($"[NN SELF-TEST] Test Subspace Pattern: {string.Join(",", generatedPattern.IOVECTOR.Where(id => id != -1).Take(5))}, ... (Sum: {generatedSum}) -> ");
-
-                        if (matchCount > 0)
+                        if (mostRepeated.Key > 0)
                         {
-                            Console.ForegroundColor = ConsoleColor.Green;
-                            Console.WriteLine($"!!! SIMULATED SUCCESS (MAX OPTIMALITY) !!! Model {partnerToTest} successfully recognized its generated SUB-SPACE pattern (Match Count: {matchCount}).");
-                            Console.ResetColor();
+                            // Berechne die Wahrscheinlichkeit für das häufigste Muster
+                            int totalSamples = patternSumOccurrences.Values.Sum();
+                            double probMostRepeated = (double)mostRepeated.Value / totalSamples;
+
+                            // Berechne die Wahrscheinlichkeit für alle anderen Muster
+                            var otherPatterns = patternSumOccurrences.Where(kvp => kvp.Key != mostRepeated.Key && kvp.Value > 0);
+                            double maxOtherProb = otherPatterns.Any() ? otherPatterns.Max(kvp => (double)kvp.Value / totalSamples) : 0;
+
+                            // Nur wenn das häufigste Muster signifikant häufiger ist als alle anderen
+                            if (probMostRepeated > maxOtherProb)
+                            {
+                                int[] repeatingVector = Enumerable.Repeat(-1, MAX_PATTERN_LENGTH).ToArray();
+                                repeatingVector[0] = mostRepeated.Key;
+                                nn.IO repeatingPattern = new nn.IO { IOVECTOR = repeatingVector };
+
+                                int matchCount = generator.GetPossibilitySpaceCount(repeatingPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
+                                Console.Write($"[NN SELF-TEST] Repeating Pattern: {mostRepeated.Key} (Count: {mostRepeated.Value}) -> ");
+                                if (matchCount > 0)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine("REPEATING PATTERN SUCCESSFULLY RECOGNIZED!");
+                                    Console.ResetColor();
+                                }
+                                else
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Yellow;
+                                    Console.WriteLine("Repeating pattern was NOT recognized.");
+                                    Console.ResetColor();
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("[NN SELF-TEST] No statistically significant repeating pattern detected.");
+                            }
                         }
-                        else
+                    }
+
+
+                    if (_isScrapingMode)
+                    {
+                        bool anyRepeatedPattern = false;
+                        Console.WriteLine("\n--- Scraping Recognition Report (Repeated Patterns Only) ---");
+                        var repeatedSums = patternSumOccurrences.Where(kvp => kvp.Value > 1).Select(kvp => kvp.Key).ToList();
+                        for (int partnerId = 0; partnerId < nnProcessors.Count; partnerId++)
+                        {
+                            var processor = nnProcessors[partnerId];
+                            var recognizedRepeated = processor.GetRecognizedPatternSums().Where(s => repeatedSums.Contains(s)).ToList();
+
+                            if (recognizedRepeated.Count > 0)
+                            {
+                                anyRepeatedPattern = true;
+                                Console.ForegroundColor = ConsoleColor.Green;
+                                Console.WriteLine($"[P{partnerId}] Recognized Repeated Pattern Sums: {string.Join(", ", recognizedRepeated)} (Count: {recognizedRepeated.Count})");
+                                Console.ResetColor();
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                                Console.WriteLine($"[P{partnerId}] No repeated patterns recognized.");
+                                Console.ResetColor();
+                            }
+                        }
+                        if (!anyRepeatedPattern)
                         {
                             Console.ForegroundColor = ConsoleColor.Yellow;
-                            Console.WriteLine("Model failed to recognize its own generated pattern (Unexpected failure - KEY MISMATCH).");
+                            Console.WriteLine("No repeated patterns were recognized or stored by any NN processor during scraping.");
                             Console.ResetColor();
                         }
+                        Console.WriteLine("-----------------------------------");
                     }
-                    else
+
+
+
+                    // Find the first partner (ID > 0) that has stored memory to guarantee a success path
+                    for (int i = 1; i < nnProcessors.Count; i++)
                     {
-                        Console.WriteLine("\n[NN SELF-TEST] Skipping generation: No partners (ID > 0) have stored patterns yet to test.");
+                        if (nnProcessors[i].HasKnownPatterns())
+                        {
+                            generator = nnProcessors[i];
+                            partnerToTest = i;
+                            break;
+                        }
                     }
+
+                    // 5. Generative Self-Test (NN Generation Mode)
+                    if (!_isScrapingMode) // Nur im Generierungsmodus ausführen!
+                    {
+
+                        // Find the first partner (ID > 0) that has stored memory to guarantee a success path
+                        for (int i = 1; i < nnProcessors.Count; i++)
+                        {
+                            if (nnProcessors[i].HasKnownPatterns())
+                            {
+                                generator = nnProcessors[i];
+                                partnerToTest = i;
+                                break;
+                            }
+                            }
+
+                            if (generator != null)
+                            {
+                                Console.WriteLine($"\n--- Generative Self-Test (Partner {partnerToTest}) ---");
+                                // Generate a pattern from a *subspace* of possible patterns (now using max optimality)
+                                nn.IO generatedPattern = generator.GenerateKnownPattern(partnerToTest);
+
+                                // Test the generated pattern against its own memory (Self-Test)
+                                int matchCount = generator.GetPossibilitySpaceCount(generatedPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
+                                int generatedSum = generatedPattern.IOVECTOR.Where(id => id > 0).Sum();
+
+                                Console.Write($"[NN SELF-TEST] Test Subspace Pattern: {string.Join(",", generatedPattern.IOVECTOR.Where(id => id != -1).Take(5))}, ... (Sum: {generatedSum}) -> ");
+
+                                if (matchCount > 0)
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Green;
+                                    Console.WriteLine($"!!! SIMULATED SUCCESS (MAX OPTIMALITY) !!! Model {partnerToTest} successfully recognized its generated SUB-SPACE pattern (Match Count: {matchCount}).");
+                                    Console.ResetColor();
+                                }
+                                else
+                                {
+                                    Console.ForegroundColor = ConsoleColor.Yellow;
+                                    Console.WriteLine("Model failed to recognize its own generated pattern (Unexpected failure - KEY MISMATCH).");
+                                    Console.ResetColor();
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("\n[NN SELF-TEST] Skipping generation: No partners (ID > 0) have stored patterns yet to test.");
+                            }
+                        }
 
 
                     await Task.Delay(1000, token); // Wait for 1 second before next cycle
