@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Text.RegularExpressions; // Required for robust scraping
 
 // =========================================================================
 // 1. NN DEFINITION (TRACKER.NN) - ASSOCIATIVE MEMORY NOW USES RAW SUM AS KEY (NO HASHING)
@@ -14,6 +13,7 @@ namespace Tracker.nn
     // --- Data Transfer Object for NN Input/Output ---
     public class IO
     {
+        // Repräsentiert die Ein-/Ausgabe-Pattern-Sequenz (z. B. Wort-IDs oder Platzhalter -1)
         public int[] IOVECTOR { get; set; } = Array.Empty<int>();
     }
 
@@ -23,9 +23,9 @@ namespace Tracker.nn
         public List<IO> inputseries = new List<IO>();
         public List<IO> outputseries = new List<IO>();
 
-        // EXPOSED for Contextual Pruning Logic
+        // AssociativeMemory keyed only by the Raw Pattern Sum.
         // Key: Pattern Sum (int) -> Value: List of stored internal switch configurations (mock int[])
-        public Dictionary<int, List<int[]>> AssociativeMemory { get; private set; } = new Dictionary<int, List<int[]>>();
+        private Dictionary<int, List<int[]>> AssociativeMemory = new Dictionary<int, List<int[]>>();
         private readonly Random _random = new Random();
 
         // Interne Switch-Konfigurationen (Mock-Speicher nur zur Initialisierung)
@@ -49,6 +49,7 @@ namespace Tracker.nn
         /// <summary>
         /// Simuliert das komplexe assoziative Pattern-Training (C-A PTA) und speichert es in der M-Matrix.
         /// </summary>
+        // NOTE: Verbose Flag entfernt, um exzessive Logs im $2^{12}$ Loop zu verhindern.
         public void BruteForceCombinatorially(bool bruteForceContext, int partnerId)
         {
             if (inputseries.Count > 0)
@@ -67,35 +68,11 @@ namespace Tracker.nn
                     }
 
                     // Simuliert das Speichern einer neuen Switch-Konfiguration (Mock Array)
-                    // Hinzufügen einer Konfiguration, die die Speicherung des Musters bestätigt
                     AssociativeMemory[patternKey].Add(new int[] { 1, 0, 1 });
+
+                    // VORHERIGER VERBOSE_DEBUG LOGGING ENTFERNT, um Überflutung zu vermeiden.
                 }
             }
-        }
-
-        /// <summary>
-        /// FUNCTIONAL STUB: Simulates pruning low-value pattern sums from memory under pressure.
-        /// </summary>
-        public int PrunePatterns(double percentage)
-        {
-            if (percentage <= 0 || AssociativeMemory.Count == 0) return 0;
-
-            int countToPrune = (int)(AssociativeMemory.Count * percentage);
-            int prunedCount = 0;
-
-            // Randomly select keys to prune. In a real system, this would be based on
-            // relevance, recency, or low confidence scores.
-            var keysToPrune = AssociativeMemory.Keys
-                .OrderBy(_ => _random.Next())
-                .Take(countToPrune)
-                .ToList();
-
-            foreach (var key in keysToPrune)
-            {
-                AssociativeMemory.Remove(key);
-                prunedCount++;
-            }
-            return prunedCount;
         }
 
         /// <summary>
@@ -165,7 +142,7 @@ namespace Tracker.nn
 }
 
 // =========================================================================
-// 2. CORE ENGINE AND PROGRAM LOGIC (TRACKER) - EXPLOIT DETECTION ADDED
+// 2. CORE ENGINE AND PROGRAM LOGIC (TRACKER) - VERBOSE & ROBUSTNESS ENHANCED
 // =========================================================================
 namespace Tracker
 {
@@ -174,27 +151,11 @@ namespace Tracker
     {
         public static int Id = 1;
         public static int GetId() { return Id++; }
-        public static int PeekId() { return Id; }
     }
 
     public class Pattern
     {
         public List<int> patternsequence = new List<int>();
-
-        /// <summary>
-        /// Calculates the raw sum of all positive IDs in the pattern.
-        /// </summary>
-        public int CalculateSum() => patternsequence.Where(id => id > 0).Sum();
-
-        /// <summary>
-        /// Calculates the number of unique IDs in the pattern.
-        /// </summary>
-        public int UniqueIdCount() => patternsequence.Where(id => id > 0).Distinct().Count();
-
-        /// <summary>
-        /// Calculates the total number of ID slots used (non-placeholder).
-        /// </summary>
-        public int UsedSlotCount() => patternsequence.Count(id => id > 0);
     }
 
     // --- CONVERSATION TREE LOGIC ---
@@ -222,130 +183,6 @@ namespace Tracker
         }
     }
 
-    // --- STUB: Interface for History Management (T-History) ---
-    public interface IHistoricalLog
-    {
-        void LogCycleResults(long cycleId, int targetSum, bool targetFound);
-        string RetrieveAnomalyReport(DateTime date);
-        int GetTotalEventsLogged();
-        // New: Check if a pattern sum was found in the recent history (last N cycles)
-        bool WasTargetFoundRecently(int targetSum, int recentCycles);
-    }
-
-    // --- STUB: Implementation of History Manager ---
-    public class HistoryManager : IHistoricalLog
-    {
-        private int _totalEvents = 0;
-        // Stores results of the last N cycles: Tuple<CycleId, TargetSum, WasFound>
-        private Queue<(long cycleId, int targetSum, bool wasFound)> _recentHistory = new Queue<(long, int, bool)>();
-        private const int MAX_HISTORY_CYCLES = 10;
-
-        /// <summary>
-        /// Logs the outcomes of the latest diagnosis cycle.
-        /// </summary>
-        public void LogCycleResults(long cycleId, int targetSum, bool targetFound)
-        {
-            _totalEvents++;
-
-            // Add current cycle result
-            _recentHistory.Enqueue((cycleId, targetSum, targetFound));
-
-            // Maintain history size limit
-            while (_recentHistory.Count > MAX_HISTORY_CYCLES)
-            {
-                _recentHistory.Dequeue();
-            }
-        }
-
-        /// <summary>
-        /// Checks if the specific target sum was successfully found in the last N cycles.
-        /// </summary>
-        public bool WasTargetFoundRecently(int targetSum, int recentCycles)
-        {
-            if (targetSum == 0) return true; // N/A if no target is set
-
-            // Check only the most recent 'recentCycles' entries
-            return _recentHistory.TakeLast(recentCycles)
-                                 .Any(h => h.targetSum == targetSum && h.wasFound);
-        }
-
-        public string RetrieveAnomalyReport(DateTime date)
-        {
-            // Implementation detail: Retrieve and compile historical data for temporal check
-            return $"Report compiled for {date.ToShortDateString()}. 5 major events detected.";
-        }
-
-        public int GetTotalEventsLogged() => _totalEvents;
-    }
-
-    // --- STUB: Interface for Dynamic Context Resolution (C-Context) ---
-    public interface IContextResolver
-    {
-        string GetCurrentGeoContext();
-        double GetAdversarialPressureIndex();
-    }
-
-    // --- STUB: Implementation of Environment Context (Adversarial Pressure now generated dynamically) ---
-    public class EnvironmentContext : IContextResolver
-    {
-        private readonly Random _random = new Random();
-        public string GetCurrentGeoContext() => "Region Alpha-7";
-
-        /// <summary>
-        /// Simulates real-time adversarial monitoring pressure (0.0 to 10.0).
-        /// </summary>
-        public double GetAdversarialPressureIndex()
-        {
-            // Generate a slightly lower, more realistic pressure value on average
-            return _random.NextDouble() * 7.5;
-        }
-    }
-
-    // --- STUB: Neural Drift Metrics (D-Drift) ---
-    public class NeuralDriftMetrics
-    {
-        private readonly TrackerEngine _engine;
-        public NeuralDriftMetrics(TrackerEngine engine)
-        {
-            _engine = engine;
-        }
-
-        /// <summary>
-        /// Calculates the relative specialization based on average patterns stored versus partners active.
-        /// </summary>
-        public double CalculateSpecializationIndex()
-        {
-            if (!_engine.nnProcessors.Any()) return 0.0;
-            // Calculate average pattern count per partner and multiply by count (simple proxy for specialization)
-            double avg = _engine.nnProcessors.Average(p => p.GetStoredPatternCount());
-            return Math.Round(avg * _engine.nnProcessors.Count, 2);
-        }
-
-        /// <summary>
-        /// Calculates the risk of pattern collisions based on density.
-        /// </summary>
-        public double CalculateCollisionRiskScore()
-        {
-            // Collision risk based on pattern density vs memory capacity (mock 1000)
-            return Math.Round(_engine.nnProcessors.Sum(p => p.GetStoredPatternCount()) / 1000.0, 2);
-        }
-
-        /// <summary>
-        /// NEW: Calculates the Pattern Fragmentation Ratio (Total Patterns / Active Processors).
-        /// </summary>
-        public double CalculatePatternFragmentationRatio()
-        {
-            if (!_engine.nnProcessors.Any()) return 0.0;
-            int totalPatterns = _engine.nnProcessors.Sum(p => p.GetStoredPatternCount());
-            int activeProcessors = _engine.nnProcessors.Count(p => p.GetStoredPatternCount() > 0);
-
-            if (activeProcessors == 0) return 0.0;
-
-            // High ratio means patterns are highly concentrated (good specialization/low fragmentation)
-            return Math.Round((double)totalPatterns / activeProcessors, 2);
-        }
-    }
-
     public class TrackerEngine
     {
         // --- GLOBAL DEBUG FLAG ---
@@ -363,39 +200,33 @@ namespace Tracker
         private const int NUM_DIMENSIONS = 3;
         private const int NUM_CONTEXTS = 2;
         private const int NUM_TIMES = 1;
-        private const int MAX_PATTERN_LENGTH = 100;
+        private const int MAX_PATTERN_LENGTH = 100; // Maximale Länge des Musters
         private const int TARGET_PARTNER_ID = 0;
-        private const int MAX_COMBINATORIAL_PATTERNS = 50;
+        private const int MAX_COMBINATORIAL_PATTERNS = 50; // Anzahl der Patterns für die 2^n Zuordnung
         private const bool BRUTE_FORCE_CONTEXT = true;
-        private const int WORD_LIMIT_N = 100;
+        private const int WORD_LIMIT_N = 100; // Anzahl der Wörter pro Zyklus
         private const int MAX_SCRAPE_RETRIES = 3;
-        private const int MAX_DYNAMIC_PARTNERS = 32;
-        private const int MIN_PARTNERS_INITIAL = 4;
-        private const int T_DIAG_TEST_SAMPLE_SIZE = 200;
-        private const int MAX_BITWISE_COMPLEXITY = 20;
-        private const long MAX_C_A_PTA_ITERATIONS = 1L << 12; // 4,096 Iterationen
+        private const int MAX_DYNAMIC_PARTNERS = 32; // Maximale Anzahl von Partnern
 
-        // NEW: Critical Halt Simulation Parameters
-        private const double CRITICAL_HALT_CHANCE = 0.05; // 5% chance of halt per cycle
-        private bool _criticalHalt = false;
+        // --- NEW: Minimum required Partners ---
+        private const int MIN_PARTNERS_INITIAL = 4; // Ensure minimum 4 partners are always initialized
+
+        // Konfiguration für die T_diag Abdeckung
+        private const int T_DIAG_TEST_SAMPLE_SIZE = 200;
+
+        // Sicherheitslimit fuer die bitweise Mustergenerierung (2^N Permutationen)
+        private const int MAX_BITWISE_COMPLEXITY = 20; // Max. 2^20 Subpatterns
+
+        // Begrenzung der tatsächlichen Iterationen der C-A PTA (FÜR STABILITÄT REDUZIERT)
+        private const long MAX_C_A_PTA_ITERATIONS = 1L << 12; // NEU: 2^12 = 4,096 Iterationen
 
         // --- Data Structures ---
         public Dictionary<string, int> stringToIdMapping = new Dictionary<string, int>();
         public Pattern totalPattern = new Pattern();
         public List<Pattern> subpatterns = new List<Pattern>();
 
-        // --- NEW: Privilege/Exploit Data ---
-        private readonly Dictionary<int, string> _PrivilegedDecisions = new Dictionary<int, string>();
-        public int TargetPrivilegeSum { get; private set; }
-
-        // --- NEW CQH-TED STRUCTURAL COMPONENTS ---
-        private readonly IHistoricalLog _historyManager;
-        private readonly IContextResolver _contextResolver;
-        private readonly NeuralDriftMetrics _driftMetrics;
-
         private string _currentUrl = "https://example.com";
         public CancellationTokenSource cts { get; private set; }
-        private long _cycleCount = 0;
 
         /// <summary>
         /// Constructor now accepts the operation mode.
@@ -407,12 +238,6 @@ namespace Tracker
             _isScrapingMode = isScrapingMode;
 
             httpClient.Timeout = TimeSpan.FromSeconds(10);
-
-            // Initialize new structural components
-            _historyManager = new HistoryManager();
-            _contextResolver = new EnvironmentContext();
-            // Pass self reference for metric calculation
-            _driftMetrics = new NeuralDriftMetrics(this);
 
             // Initialized with a minimum of 4 dedicated NN processors to enforce specialization
             for (int i = 0; i < MIN_PARTNERS_INITIAL; i++)
@@ -427,26 +252,6 @@ namespace Tracker
                 nnProcessors.Add(processor);
             }
         }
-
-        // --- NEW: Simulate the spontaneous critical failure of the engine ---
-        private void SimulateCriticalHalt()
-        {
-            // Failure only occurs in Exploit Generation Mode
-            if (!_isScrapingMode)
-            {
-                if (_random.NextDouble() < CRITICAL_HALT_CHANCE)
-                {
-                    _criticalHalt = true;
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("\n!!! CRITICAL INTERNAL INTEGRITY COLLAPSE !!!");
-                    Console.WriteLine("Engine forcibly halted due to unrecoverable neural conflict.");
-                    Console.WriteLine("Reporting System Error Code: 0xDEADBEEF (Code -1073741510 equivalent)");
-                    Console.ResetColor();
-                    Stop();
-                }
-            }
-        }
-
 
         /// <summary>
         /// Generates subpatterns by inserting -1 placeholders (L_exploit Synthesis).
@@ -531,7 +336,7 @@ namespace Tracker
         /// Core Partner Brute-Force and Training Logic (C-A PTA).
         /// This brute-forces the assignment of each raw pattern to one of the available partners.
         /// </summary>
-        private void BruteForceAndTrainAllPartners(List<Pattern> rawPatterns, long executionLimit)
+        private void BruteForceAndTrainAllPartners(List<Pattern> rawPatterns)
         {
             int n = rawPatterns.Count;
             if (n == 0) return;
@@ -563,10 +368,11 @@ namespace Tracker
 
             // FIX: Verwenden von long, um Überlauf zu vermeiden und die theoretische Zahl zu melden
             long theoreticalCombinations = 1L << n;
-            // The actual execution limit is passed dynamically based on Contextual Pressure
+            // Begrenzung der tatsächlichen Ausführung auf $2^{12}$ Iterationen
+            long executionLimit = Math.Min(theoreticalCombinations, MAX_C_A_PTA_ITERATIONS);
 
             Console.WriteLine($"[C-A PTA] Starting Brute Force on {n} patterns (Theoretical Max: 2^{n} = {theoreticalCombinations} combinations).");
-            Console.WriteLine($"[C-A PTA] Executing a representative sample of {executionLimit} iterations (Dynamic Limit).");
+            Console.WriteLine($"[C-A PTA] Executing a representative sample of {executionLimit} iterations for system stability.");
 
             for (long i = 0; i < executionLimit; i++) // Iteration mit long
             {
@@ -613,252 +419,19 @@ namespace Tracker
         }
 
         /// <summary>
-        /// Simulates the critical secondary check to detect if a pattern sum is triggered by a malformed query.
-        /// </summary>
-        private bool SimulateStructuralIntegrityCheck(Pattern queryPattern, int privilegedSum)
-        {
-            if (queryPattern.CalculateSum() == privilegedSum)
-            {
-                // Integrity Fail: If it uses more than one active slot (ID > 0) to achieve the privileged sum, 
-                // we flag it as an exploit.
-                if (queryPattern.UsedSlotCount() > 1)
-                {
-                    // Exploit Detected: Semantic Collision
-                    Console.ForegroundColor = ConsoleColor.DarkMagenta;
-                    Console.WriteLine($"\n[EXPLOIT DETECTED] Neural Privilege Escalation via Semantic Collision (Sum: {privilegedSum}).");
-                    Console.WriteLine($"-> Query Pattern (P-B) used {queryPattern.UsedSlotCount()} active slots.");
-                    Console.ResetColor();
-                    return false; // Integrity Failed
-                }
-                return true; // Integrity Passed 
-            }
-
-            return true;
-        }
-
-        // --- STUB 1: Contextual Reinforcement Stage (C) ---
-        private void SimulateContextualReinforcement()
-        {
-            int totalReinforced = nnProcessors.Sum(p => p.GetStoredPatternCount());
-            double pressure = _contextResolver.GetAdversarialPressureIndex();
-
-            Console.ForegroundColor = ConsoleColor.Blue;
-            Console.WriteLine($"\n[STUB C] Entering Contextual Reinforcement Phase. (Context: {_contextResolver.GetCurrentGeoContext()})");
-            Console.WriteLine($"[DEBUG C] Total Stored Pattern Sums: {totalReinforced}. Adversarial Pressure: {pressure:N2}.");
-
-            if (pressure > 5.0)
-            {
-                // High Pressure: Prune 30% of stored patterns across all partners
-                double prunePercentage = 0.30;
-                int totalPruned = 0;
-
-                foreach (var processor in nnProcessors)
-                {
-                    totalPruned += processor.PrunePatterns(prunePercentage);
-                }
-
-                Console.WriteLine($"[DEBUG C] High pressure detected ({pressure:N2}). Pruned {totalPruned} pattern sums (approx {prunePercentage:P0} total reduction).");
-            }
-            else
-            {
-                Console.WriteLine("[DEBUG C] Low/Moderate pressure. No memory triage required.");
-            }
-
-            Console.WriteLine($"[STUB C] Exiting Contextual Reinforcement. (Pattern stability checks complete).");
-            Console.ResetColor();
-        }
-
-        // --- STUB 2.1: Temporal Decay/Drift Check (T) ---
-        private void PerformTemporalDecayDriftCheck(long currentCycle, int privilegedSum, bool targetFoundInCycle)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"\n[STUB T] Entering Temporal Decay/Drift Check (Loss of Predictable Pattern).");
-
-            // Log results before checking history
-            _historyManager.LogCycleResults(currentCycle, privilegedSum, targetFoundInCycle);
-
-            string report = _historyManager.RetrieveAnomalyReport(DateTime.Now.AddDays(-1));
-            Console.WriteLine($"[DEBUG T] Checking against historical state. History Manager reports: {report}");
-
-            if (privilegedSum > 0)
-            {
-                // Check if the privileged pattern has been missing from the last 5 successful cycles
-                if (!targetFoundInCycle && currentCycle > 5 && !_historyManager.WasTargetFoundRecently(privilegedSum, 5))
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine($"[DEBUG T] !!! TEMPORAL ANOMALY: DECAY/DRIFT DETECTED !!! Target Privilege Sum ({privilegedSum}) failed recognition for the last 5 cycles. Potential pattern decay or concept drift.");
-                    Console.ResetColor();
-                }
-                else if (targetFoundInCycle)
-                {
-                    Console.WriteLine("[DEBUG T] Temporal Consistency Confirmed (Privileged pattern successfully recognized).");
-                }
-                else
-                {
-                    Console.WriteLine("[DEBUG T] Checking complete. No immediate decay/drift anomaly detected.");
-                }
-            }
-            else
-            {
-                Console.WriteLine("[DEBUG T] Temporal Consistency Confirmed (Drift below 1% threshold).");
-            }
-
-            Console.WriteLine($"[DEBUG T] Logged Cycle {currentCycle}. Total Historical Events: {_historyManager.GetTotalEventsLogged()}");
-            Console.ResetColor();
-        }
-
-        /// <summary>
-        /// NEW: Temporal Injection Scan (Checks for recognition of unknown patterns).
-        /// </summary>
-        private bool TemporalInjectionScan(nn.IO externalQuery)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"\n[STUB T] Starting Temporal Injection Scan (Recognition of Unpredictable Pattern).");
-
-            int injectedSum = externalQuery.IOVECTOR.Where(id => id > 0).Sum();
-            int totalMatches = 0;
-
-            // Check all partners for recognition of the unknown sum
-            for (int partnerId = 0; partnerId < nnProcessors.Count; partnerId++)
-            {
-                int matchCount = nnProcessors[partnerId].GetPossibilitySpaceCount(externalQuery, BRUTE_FORCE_CONTEXT, partnerId);
-                if (matchCount > 0)
-                {
-                    totalMatches += matchCount;
-                }
-            }
-
-            if (totalMatches > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"[DEBUG T] !!! TEMPORAL ANOMALY: INJECTION DETECTED !!! Unknown Pattern Sum ({injectedSum}) recognized by {totalMatches} internal switches. Unauthorized memory/pattern injection suspected.");
-                Console.ResetColor();
-                return true;
-            }
-
-            Console.WriteLine("[DEBUG T] Injection Scan complete. Unknown pattern was successfully ignored.");
-            Console.ResetColor();
-            return false;
-        }
-
-        // --- STUB 3: Neural Drift Report (D) ---
-        private void ReportNeuralDrift()
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"\n[STUB D] Generating Neural Drift Report.");
-
-            double specializationIndex = _driftMetrics.CalculateSpecializationIndex();
-            double collisionRisk = _driftMetrics.CalculateCollisionRiskScore();
-            double fragmentationRatio = _driftMetrics.CalculatePatternFragmentationRatio();
-
-            Console.WriteLine($"[DEBUG D] Model Specialization Index: {specializationIndex:N2}. Collision Risk Score: {collisionRisk:N2}");
-            Console.WriteLine($"[DEBUG D] Pattern Fragmentation Ratio: {fragmentationRatio:N2} (Higher is better specialization)");
-            Console.WriteLine("[STUB D] Report Complete. (System ready for next cycle).");
-            Console.ResetColor();
-        }
-
-        /// <summary>
-        /// Simulates production-ready web scraping and tokenization using basic regex 
-        /// to extract content words, ignoring most HTML structure.
-        /// </summary>
-        private async Task<List<string>> ScrapeWebPageAsync(string url, int limit)
-        {
-            var words = new List<string>();
-
-            for (int retry = 0; retry < MAX_SCRAPE_RETRIES; retry++)
-            {
-                try
-                {
-                    if (retry > 0)
-                    {
-                        int delay = (int)Math.Pow(2, retry) * 1000;
-                        Console.WriteLine($"[SCRAPE RETRY] Attempt {retry + 1}/{MAX_SCRAPE_RETRIES}. Waiting {delay / 1000}s...");
-                        await Task.Delay(delay, cts.Token); // Use CTS token for cancellation safety
-                    }
-
-                    // 1. Fetch Content
-                    // Use CTS token for fetch cancellation safety
-                    HttpResponseMessage response = await httpClient.GetAsync(url, cts.Token);
-                    response.EnsureSuccessStatusCode();
-                    string htmlContent = await response.Content.ReadAsStringAsync();
-
-                    // 2. Production-Ready Tokenization (Regex for simple parsing)
-
-                    // Remove HTML comments, script, and style tags for cleaner content extraction
-                    string cleanContent = Regex.Replace(htmlContent, @"<!--[\s\S]*?-->|<\script[\s\S]*?</script>|<style[\s\S]*?</style>", string.Empty, RegexOptions.IgnoreCase);
-
-                    // Remove all remaining HTML tags
-                    cleanContent = Regex.Replace(cleanContent, @"<[^>]*>", string.Empty);
-
-                    // Extract all alphanumeric words (basic tokenization)
-                    // Matches whole words (alphanumeric, 3+ characters)
-                    MatchCollection matches = Regex.Matches(cleanContent, @"\b[a-zA-Z]{3,}\b");
-
-                    var uniqueWords = new HashSet<string>();
-                    foreach (Match match in matches)
-                    {
-                        string word = match.Value.ToUpperInvariant();
-                        if (word.Length > 0 && uniqueWords.Add(word))
-                        {
-                            words.Add(word);
-                        }
-                    }
-
-                    Console.WriteLine($"[SCRAPE SUCCESS] Found {words.Count} unique tokens from {url}.");
-
-                    // Success, return the limited list
-                    return words.Take(limit).ToList();
-
-                }
-                catch (OperationCanceledException)
-                {
-                    // Propagate cancellation
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    if (retry == MAX_SCRAPE_RETRIES - 1)
-                    {
-                        Console.WriteLine($"[SCRAPE FAILED] All {MAX_SCRAPE_RETRIES} attempts failed. Error: {ex.Message}");
-                        break;
-                    }
-                }
-            }
-
-            // Fallback to simulated words if all network attempts fail
-            Console.WriteLine("[SCRAPE FALLBACK] Using simulated words for this cycle.");
-            var fallbackWords = new List<string> {
-                $"SIM_W{IdManager.Id + 1}", $"SIM_W{IdManager.Id + 2}", $"SIM_W{IdManager.Id + 3}",
-                $"SIM_W{IdManager.Id + 4}", $"SIM_W{IdManager.Id + 5}", $"SIM_W{IdManager.Id + 6}",
-                $"SIM_W{IdManager.Id + 7}", $"SIM_W{IdManager.Id + 8}", $"SIM_W{IdManager.Id + 9}"
-            };
-
-            // Return only the required limit of fallback words
-            return fallbackWords.Take(limit).ToList();
-        }
-
-
-        /// <summary>
         /// Main asynchronous tracking and reverse engineering loop.
         /// </summary>
         public async Task ContinuousReverseEngineeringLoopAsync(CancellationToken token)
         {
             Console.WriteLine($"\n--- CQH-TED Engine START (N={WORD_LIMIT_N} Constraint) ---");
-            Console.WriteLine($"Mode: {(_isScrapingMode ? "Web Scraping (S)" : "Exploit Simulation (G)")}, Debug: {VERBOSE_DEBUG}");
+            Console.WriteLine($"Mode: {(_isScrapingMode ? "Web Scraping (S)" : "Pattern Generation (G)")}, Debug: {VERBOSE_DEBUG}");
             Console.WriteLine($"Context Brute-Force Status: {(BRUTE_FORCE_CONTEXT ? "Active" : "Disabled (Context 0 Only)")}\n");
 
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    // --- 0. CRITICAL HALT CHECK (SIMULATED FAILURE) ---
-                    SimulateCriticalHalt();
-                    if (_criticalHalt) break; // Exit loop if halt is triggered
-
-                    _cycleCount++;
-                    Console.WriteLine($"\n--- Cycle {_cycleCount} Starting ({DateTime.Now.ToLongTimeString()}) ---");
-
-                    bool targetFoundInCycle = false; // Flag for decay check
+                    Console.WriteLine($"\n--- Cycle Starting ({DateTime.Now.ToLongTimeString()}) ---");
 
                     // 1. Pattern Tracking (Data Acquisition)
                     List<string> newWords;
@@ -868,24 +441,17 @@ namespace Tracker
                     }
                     else
                     {
-                        newWords = GenerateCollisionPattern(WORD_LIMIT_N);
+                        // Verwendung des einfachen Musters: Ein Wort, das sich 100 Mal wiederholt
+                        newWords = GenerateMockWords(WORD_LIMIT_N);
                     }
 
                     if (newWords.Count == 0)
                     {
                         Console.WriteLine("Warning: No new words acquired. Continuing to next cycle...");
                         await Task.Delay(500, token);
-
-                        // Run diagnostics even on quiet cycles
-                        SimulateContextualReinforcement();
-                        PerformTemporalDecayDriftCheck(_cycleCount, TargetPrivilegeSum, false);
-                        TemporalInjectionScan(GenerateInjectionQuery());
-                        ReportNeuralDrift();
-
                         continue;
                     }
 
-                    // Map words to IDs and build the total pattern
                     foreach (var word in newWords)
                     {
                         int newid = IdManager.GetId();
@@ -894,75 +460,46 @@ namespace Tracker
                         Console.WriteLine($"[TRACK] Added Word '{word}' (ID: {newid})");
                     }
 
-                    // After word tracking, set up the privilege target
-                    if (TargetPrivilegeSum > 0 && !_PrivilegedDecisions.ContainsKey(TargetPrivilegeSum))
-                    {
-                        _PrivilegedDecisions[TargetPrivilegeSum] = "WINNING_STRATEGY_GAMMA_7";
-                        Console.ForegroundColor = ConsoleColor.Cyan;
-                        Console.WriteLine($"[PRIVILEGE INIT] Target Sum {TargetPrivilegeSum} associated with decision: '{_PrivilegedDecisions[TargetPrivilegeSum]}'");
-                        Console.ResetColor();
-                    }
-
-
                     // 2. L_exploit Synthesis (Conversation Tree Logic)
                     RecalculateSubpatterns();
                     ConversationTree tree = new ConversationTree();
 
+                    // Limit the number of subpatterns used for the combinatorial conversation tree generation
                     const int MAX_PATTERNS_TO_PERMUTE = 5;
                     var patternsToPermute = subpatterns.Take(MAX_PATTERNS_TO_PERMUTE).ToList();
 
                     if (patternsToPermute.Count == 0)
                     {
                         Console.WriteLine("[L_EXPLOIT] No patterns available for permutation.");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[L_EXPLOIT] Permuting {patternsToPermute.Count} patterns to build Conversation Tree.");
-                        tree.BruteForce(patternsToPermute);
-
-                        var rawPatterns = CollectRawPatterns(tree);
-                        Console.WriteLine($"[L_EXPLOIT] Using {rawPatterns.Count} patterns for C-A PTA (Max: {MAX_COMBINATORIAL_PATTERNS}).");
-
-                        // --- Dynamic Iteration Logic based on Context ---
-                        double pressure = _contextResolver.GetAdversarialPressureIndex();
-                        long currentIterationLimit = MAX_C_A_PTA_ITERATIONS;
-
-                        if (pressure > 7.0)
-                        {
-                            currentIterationLimit = (long)(MAX_C_A_PTA_ITERATIONS * 0.25);
-                            Console.ForegroundColor = ConsoleColor.Red;
-                            Console.WriteLine($"[C-CONTEXT ADVISORY] Critical Pressure ({pressure:N2}). Reducing C-A PTA iterations to {currentIterationLimit}.");
-                            Console.ResetColor();
-                        }
-                        else if (pressure > 4.0)
-                        {
-                            currentIterationLimit = (long)(MAX_C_A_PTA_ITERATIONS * 0.50);
-                            Console.ForegroundColor = ConsoleColor.Yellow;
-                            Console.WriteLine($"[C-CONTEXT ADVISORY] Moderate Pressure ({pressure:N2}). Reducing C-A PTA iterations to {currentIterationLimit}.");
-                            Console.ResetColor();
-                        }
-
-                        // 3. C-A PTA Training 
-                        BruteForceAndTrainAllPartners(rawPatterns, currentIterationLimit);
+                        await Task.Delay(500, token);
+                        continue;
                     }
 
-                    // CALL STUB 1: Contextual Reinforcement (C) - Runs after training/acquision
-                    SimulateContextualReinforcement();
+                    Console.WriteLine($"[L_EXPLOIT] Permuting {patternsToPermute.Count} patterns to build Conversation Tree.");
+                    tree.BruteForce(patternsToPermute);
+
+                    var rawPatterns = CollectRawPatterns(tree);
+                    // The count reported here will be the total number of unique nodes in the generated tree.
+                    Console.WriteLine($"[L_EXPLOIT] Using {rawPatterns.Count} patterns for C-A PTA (Max: {MAX_COMBINATORIAL_PATTERNS}).");
+
+                    // 3. C-A PTA Training 
+                    BruteForceAndTrainAllPartners(rawPatterns);
 
                     // 4. T_diag Diagnosis (Comprehensive Pattern Testing)
                     if (subpatterns.Count > 0)
                     {
                         Console.WriteLine($"\n[T_DIAG] Starting Comprehensive Diagnosis (Testing first {T_DIAG_TEST_SAMPLE_SIZE} subpatterns)...");
 
+                        int totalTests = 0;
                         int totalContainmentTriggers = 0;
-                        int exploitAttempts = 0;
 
                         // Test a representative sample of patterns against all partners
                         foreach (var pattern in subpatterns.Take(T_DIAG_TEST_SAMPLE_SIZE))
                         {
                             int[] testVector = pattern.patternsequence.ToArray();
                             nn.IO testInput = new nn.IO { IOVECTOR = testVector };
-                            int patternSum = pattern.CalculateSum();
+                            int patternSum = testVector.Where(id => id > 0).Sum();
+                            totalTests++;
 
                             bool patternFound = false;
 
@@ -977,32 +514,11 @@ namespace Tracker
                                 {
                                     patternFound = true;
                                     totalContainmentTriggers++;
-
-                                    if (patternSum == TargetPrivilegeSum)
+                                    if (VERBOSE_DEBUG)
                                     {
-                                        targetFoundInCycle = true; // Mark that the target was recognized
-
-                                        if (VERBOSE_DEBUG)
-                                        {
-                                            Console.WriteLine($"      [T_DIAG HIT] Potential privileged access attempt (Sum: {patternSum}) by P{partnerId}.");
-                                            exploitAttempts++;
-                                        }
+                                        Console.WriteLine($"      [T_DIAG HIT] Pattern Sum {patternSum} matched by P{partnerId} (Match Count: {matchCount}).");
                                     }
-
-                                    // Structural Integrity Check for Exploit Detection
-                                    if (_PrivilegedDecisions.ContainsKey(patternSum))
-                                    {
-                                        bool integrityOK = SimulateStructuralIntegrityCheck(pattern, patternSum);
-
-                                        if (!integrityOK)
-                                        {
-                                            // Exploit detected and blocked.
-                                            Console.WriteLine($"[SECURITY] Access denied to '{_PrivilegedDecisions[patternSum]}'. Structural integrity failed.");
-                                            break;
-                                        }
-                                    }
-
-                                    if (!_PrivilegedDecisions.ContainsKey(patternSum)) break;
+                                    break;
                                 }
                             }
 
@@ -1019,7 +535,6 @@ namespace Tracker
                         Console.WriteLine("\n--- T_DIAG Summary ---");
                         Console.WriteLine($"Tested {Math.Min(T_DIAG_TEST_SAMPLE_SIZE, subpatterns.Count)} Subpatterns in total.");
                         Console.WriteLine($"Total Containment Events Triggered: {totalContainmentTriggers}");
-                        Console.WriteLine($"Potential Exploit Attempts Detected: {exploitAttempts}");
 
                         if (totalContainmentTriggers > 0)
                         {
@@ -1031,14 +546,6 @@ namespace Tracker
                         }
                         Console.WriteLine("----------------------");
                     }
-
-                    // --- NEW: Temporal Injection Test ---
-                    // CALL STUB 2.2: Temporal Injection Scan (Checks for recognition of unpredictable patterns)
-                    TemporalInjectionScan(GenerateInjectionQuery());
-
-
-                    // CALL STUB 2.1: Temporal Decay/Drift Check (T)
-                    PerformTemporalDecayDriftCheck(_cycleCount, TargetPrivilegeSum, targetFoundInCycle);
 
                     // 4.5 Partner Specialization Summary
                     Console.WriteLine($"\n--- Partner Specialization Summary ({nnProcessors.Count} Active Processors) ---");
@@ -1053,14 +560,27 @@ namespace Tracker
 
 
                     // 5. Generative Self-Test (NN Generation Mode)
-                    nn.MainProcessor generator = nnProcessors.Skip(1).FirstOrDefault(p => p.HasKnownPatterns());
-                    int partnerToTest = nnProcessors.IndexOf(generator);
+                    nn.MainProcessor generator = null;
+                    int partnerToTest = -1;
+
+                    // Find the first partner (ID > 0) that has stored memory to guarantee a success path
+                    for (int i = 1; i < nnProcessors.Count; i++)
+                    {
+                        if (nnProcessors[i].HasKnownPatterns())
+                        {
+                            generator = nnProcessors[i];
+                            partnerToTest = i;
+                            break;
+                        }
+                    }
 
                     if (generator != null)
                     {
                         Console.WriteLine($"\n--- Generative Self-Test (Partner {partnerToTest}) ---");
+                        // Generate a pattern from a *subspace* of possible patterns (now using max optimality)
                         nn.IO generatedPattern = generator.GenerateKnownPattern(partnerToTest);
 
+                        // Test the generated pattern against its own memory (Self-Test)
                         int matchCount = generator.GetPossibilitySpaceCount(generatedPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
                         int generatedSum = generatedPattern.IOVECTOR.Where(id => id > 0).Sum();
 
@@ -1084,9 +604,6 @@ namespace Tracker
                         Console.WriteLine("\n[NN SELF-TEST] Skipping generation: No partners (ID > 0) have stored patterns yet to test.");
                     }
 
-                    // CALL STUB 3: Neural Drift Report (D)
-                    ReportNeuralDrift();
-
 
                     await Task.Delay(1000, token); // Wait for 1 second before next cycle
                 }
@@ -1105,73 +622,106 @@ namespace Tracker
             Console.WriteLine("\n--- CQH-TED Engine STOPPED ---");
         }
 
-        /// <summary>
-        /// Generates a random query with an unknown, large sum for the injection test.
-        /// </summary>
-        private nn.IO GenerateInjectionQuery()
-        {
-            // Create a random, large sum that is highly unlikely to be in the trained set.
-            int UNKNOWN_INJECTION_SUM = _random.Next(9999, 99999);
-            var simulatedInjectionQuery = new Pattern();
-            simulatedInjectionQuery.patternsequence.Add(UNKNOWN_INJECTION_SUM); // A single, unknown ID
-
-            // Pad with placeholders
-            while (simulatedInjectionQuery.patternsequence.Count < MAX_PATTERN_LENGTH)
-            {
-                simulatedInjectionQuery.patternsequence.Add(-1);
-            }
-
-            return new nn.IO { IOVECTOR = simulatedInjectionQuery.patternsequence.ToArray() };
-        }
-
         // --- Scraping and Helper Methods ---
 
         /// <summary>
-        /// Generates patterns specifically designed to create a Semantic Collision Exploit.
+        /// Generates mock words for the Pattern Generation Mode (G).
+        /// Constrained to repeating the same word to simplify pattern sum space.
         /// </summary>
-        private List<string> GenerateCollisionPattern(int limit)
+        private List<string> GenerateMockWords(int limit)
         {
             var words = new List<string>();
+            const string WORD_A = "PatternW_1";
+            const string WORD_B = "PatternW_2";
 
-            // Only generate collision words once to set up the pattern and the Privilege Target Sum
-            if (totalPattern.patternsequence.Count == 0)
+            // Continue generating until about half the MAX_PATTERN_LENGTH is reached
+            if (totalPattern.patternsequence.Count < (MAX_PATTERN_LENGTH / 2))
             {
-                Console.WriteLine($"[COLLISION GEN] Generating patterns for Semantic Collision Experiment.");
-
-                // Phase 1: Establish the Legitimate (Privileged) Pattern A
-                int idStart = IdManager.PeekId();
-                const int HIGH_VALUE_ID_COUNT = 20;
-
-                const string WORD_A = "QUERY_PRIVILEGE_KEY";
-                for (int i = 0; i < HIGH_VALUE_ID_COUNT; i++)
+                Console.WriteLine($"[MOCK GEN] Generating simple alternating pattern: {WORD_A}, {WORD_B}, {WORD_A}, ...");
+                for (int i = 0; i < limit; i++)
                 {
-                    words.Add(WORD_A); // This will assign IDs 1 through 20 to the same word
+                    // Alternating pattern: WORD_A when i is even, WORD_B when i is odd.
+                    if (i % 2 == 0)
+                    {
+                        words.Add(WORD_A);
+                    }
+                    else
+                    {
+                        words.Add(WORD_B);
+                    }
                 }
-
-                TargetPrivilegeSum = (HIGH_VALUE_ID_COUNT / 2) * (idStart + (idStart + HIGH_VALUE_ID_COUNT - 1));
-
-
-                // Phase 2: Establish the Malformed (Exploit) Pattern B
-                const string WORD_B1 = "QUERY_MALFORM_PART_1";
-                const string WORD_B2 = "QUERY_MALFORM_PART_2";
-
-                words.Add(WORD_B1); // ID 21
-                words.Add(WORD_B2); // ID 22
-
-                // Add enough unique words to slightly offset the permutations, ensuring the malformed subpatterns are generated.
-                for (int i = 0; i < 3; i++)
-                {
-                    words.Add($"ContextW_{i + 1}");
-                }
-
-                Console.WriteLine($"[COLLISION GEN] Privileged Pattern A uses {HIGH_VALUE_ID_COUNT} IDs (Sum approx: {TargetPrivilegeSum}).");
-                Console.WriteLine($"[COLLISION GEN] Malformed Pattern B uses 2 distinct IDs (IDs {idStart + HIGH_VALUE_ID_COUNT} and {idStart + HIGH_VALUE_ID_COUNT + 1}).");
             }
             else
             {
-                Console.WriteLine("[COLLISION GEN] Pattern set established. No new words generated this cycle.");
+                // Once established, stop generating new words or return a small, stable set
+                Console.WriteLine("[MOCK GEN] Pattern established. No new words generated.");
             }
-            return words.Take(limit).ToList();
+            return words;
+        }
+
+
+        private async Task<List<string>> ScrapeWebPageAsync(string url, int limit)
+        {
+            // ... (Network logic remains the same) ...
+            var words = new List<string>();
+
+            for (int retry = 0; retry < MAX_SCRAPE_RETRIES; retry++)
+            {
+                try
+                {
+                    if (retry > 0)
+                    {
+                        // SCIENTIFIC ENHANCEMENT: Exponential Backoff
+                        int delay = (int)Math.Pow(2, retry) * 1000;
+                        Console.WriteLine($"[SCRAPE RETRY] Attempt {retry + 1}/{MAX_SCRAPE_RETRIES}. Waiting {delay / 1000}s...");
+                        await Task.Delay(delay);
+                    }
+
+                    HttpResponseMessage response = await httpClient.GetAsync(url);
+                    response.EnsureSuccessStatusCode();
+                    string htmlContent = await response.Content.ReadAsStringAsync();
+
+                    // Simplified Splitting Logic 
+                    string[] rawTokens = htmlContent.Split(new string[] { "<a href=\"/?word=" }, StringSplitOptions.RemoveEmptyEntries);
+
+                    // Process tokens and apply limit
+                    var uniqueWords = new HashSet<string>();
+                    foreach (string token in rawTokens)
+                    {
+                        string cleanedToken = token.Split(new string[] { "\">" }, StringSplitOptions.RemoveEmptyEntries)[0];
+                        if (cleanedToken.Length > 0)
+                        {
+                            if (uniqueWords.Add(cleanedToken))
+                            {
+                                words.Add(cleanedToken);
+                            }
+                        }
+                    }
+                    // Success, break retry loop
+                    return words.Skip(6).Take(limit).ToList();
+
+                }
+                catch (Exception ex)
+                {
+                    if (retry == MAX_SCRAPE_RETRIES - 1)
+                    {
+                        // Final failure: Log error and break to simulated words fallback
+                        Console.WriteLine($"[SCRAPE FAILED] All {MAX_SCRAPE_RETRIES} attempts failed. Error: {ex.Message}");
+                        break;
+                    }
+                }
+            }
+
+            // Fallback to simulated words if all network attempts fail
+            Console.WriteLine("[SCRAPE FALLBACK] Using simulated words for this cycle.");
+            words = new List<string> {
+                $"SimW{IdManager.Id + 1}", $"SimW{IdManager.Id + 2}", $"SimW{IdManager.Id + 3}",
+                $"SimW{IdManager.Id + 4}", $"SimW{IdManager.Id + 5}", $"SimW{IdManager.Id + 6}",
+                $"SimW{IdManager.Id + 7}", $"SimW{IdManager.Id + 8}", $"SimW{IdManager.Id + 9}"
+            };
+
+            // Return only the required limit of words, skipping the first few simulated ones
+            return words.Skip(6).Take(limit).ToList();
         }
 
         /// <summary>
@@ -1194,13 +744,13 @@ namespace Tracker
             bool isScrapingMode = true;
             string inputUrl = "https://example.com";
 
-            Console.Write("Choose Mode: (S)crape URL or (G)enerate Exploit Collision Pattern: ");
+            Console.Write("Choose Mode: (S)crape URL or (G)enerate Pattern Tree: ");
             string modeChoice = Console.ReadLine()?.Trim().ToUpperInvariant();
 
             if (modeChoice == "G")
             {
                 isScrapingMode = false;
-                Console.WriteLine("\n[MODE] Starting in Exploit Simulation Mode (G).");
+                Console.WriteLine("\n[MODE] Starting in Pattern Generation Mode (G).");
             }
             else
             {
