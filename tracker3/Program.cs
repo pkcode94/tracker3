@@ -57,25 +57,19 @@ namespace Tracker.nn
         // NOTE: Verbose Flag entfernt, um exzessive Logs im $2^{12}$ Loop zu verhindern.
         public void BruteForceCombinatorially(bool bruteForceContext, int partnerId)
         {
-            if (inputseries.Count > 0)
+            var uniqueSums = new HashSet<int>();
+            foreach (var pattern in inputseries)
             {
-                // NOTE: Wir verwenden nur das erste Pattern der Inputseries
-                int rawSum = inputseries.First().IOVECTOR.Where(id => id > 0).Sum();
-
-                // Nur Muster mit tatsächlichen IDs (Summe > 0) werden im assoziativen Gedächtnis gespeichert.
-                if (rawSum > 0)
+                int rawSum = pattern.IOVECTOR.Where(id => id > 0).Sum();
+                if (rawSum > 0 && uniqueSums.Add(rawSum))
                 {
                     int patternKey = rawSum;
-
                     if (!AssociativeMemory.ContainsKey(patternKey))
                     {
                         AssociativeMemory[patternKey] = new List<int[]>();
                     }
-
-                    // Simuliert das Speichern einer neuen Switch-Konfiguration (Mock Array)
-                    AssociativeMemory[patternKey].Add(new int[] { 1, 0, 1 });
-
-                    // VORHERIGER VERBOSE_DEBUG LOGGING ENTFERNT, um Überflutung zu vermeiden.
+                    // Dynamisch: Speichere die tatsächliche IOVECTOR als Switch-Konfiguration
+                    AssociativeMemory[patternKey].Add(pattern.IOVECTOR.ToArray());
                 }
             }
         }
@@ -391,16 +385,16 @@ namespace Tracker
                 // Apply current combinatorial assignment (brute-forcing 2^n assignments)
                 for (int j = 0; j < n; j++)
                 {
-                    // Use the binary assignment (0 or 1) and map it onto the P available partners.
-                    long binaryAssignment = (i >> j) & 1L;
+                    int sum = rawPatterns[j].patternsequence.Where(id => id > 0).Sum();
+                    int assignedPartner = ((sum * 31) + j) % dynamicPartnerCount; // 31 als Primzahl für bessere Streuung
 
-                    // Simple cyclic assignment using the dynamic count P.
-                    int assignedPartner = (j + (int)binaryAssignment) % dynamicPartnerCount;
-
-                    nn.IO ioPattern = new nn.IO { IOVECTOR = rawPatterns[j].patternsequence.ToArray() };
-
-                    nnProcessors[assignedPartner].inputseries.Add(ioPattern);
-                    nnProcessors[assignedPartner].outputseries.Add(ioPattern);
+                    var patternSum = sum;
+                    if (!nnProcessors[assignedPartner].inputseries.Any(io => io.IOVECTOR.Where(id => id > 0).Sum() == patternSum))
+                    {
+                        nn.IO ioPattern = new nn.IO { IOVECTOR = rawPatterns[j].patternsequence.ToArray() };
+                        nnProcessors[assignedPartner].inputseries.Add(ioPattern);
+                        nnProcessors[assignedPartner].outputseries.Add(ioPattern);
+                    }
                 }
 
                 // Brute-force internal switches for all P active partners
@@ -583,104 +577,8 @@ namespace Tracker
                     }
 
                     // --- Ergänzung im Generative Self-Test (NN Generation Mode) ---
-                    if (generator != null && patternSumOccurrences.Count > 0)
-                    {
-                        // Finde die am häufigsten vorkommende Pattern-Summe (repeating pattern)
-                        var mostRepeated = patternSumOccurrences
-                            .Where(kvp => kvp.Value > 1)
-                            .OrderByDescending(kvp => kvp.Value)
-                            .FirstOrDefault();
-
-                        if (mostRepeated.Key > 0)
-                        {
-                            // Berechne die Wahrscheinlichkeit für das häufigste Muster
-                            int totalSamples = patternSumOccurrences.Values.Sum();
-                            double probMostRepeated = (double)mostRepeated.Value / totalSamples;
-
-                            // Berechne die Wahrscheinlichkeit für alle anderen Muster
-                            var otherPatterns = patternSumOccurrences.Where(kvp => kvp.Key != mostRepeated.Key && kvp.Value > 0);
-                            double maxOtherProb = otherPatterns.Any() ? otherPatterns.Max(kvp => (double)kvp.Value / totalSamples) : 0;
-
-                            // Nur wenn das häufigste Muster signifikant häufiger ist als alle anderen
-                            if (probMostRepeated > maxOtherProb)
-                            {
-                                int[] repeatingVector = Enumerable.Repeat(-1, MAX_PATTERN_LENGTH).ToArray();
-                                repeatingVector[0] = mostRepeated.Key;
-                                nn.IO repeatingPattern = new nn.IO { IOVECTOR = repeatingVector };
-
-                                int matchCount = generator.GetPossibilitySpaceCount(repeatingPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
-                                Console.Write($"[NN SELF-TEST] Repeating Pattern: {mostRepeated.Key} (Count: {mostRepeated.Value}) -> ");
-                                if (matchCount > 0)
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Green;
-                                    Console.WriteLine("REPEATING PATTERN SUCCESSFULLY RECOGNIZED!");
-                                    Console.ResetColor();
-                                }
-                                else
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Yellow;
-                                    Console.WriteLine("Repeating pattern was NOT recognized.");
-                                    Console.ResetColor();
-                                }
-                            }
-                            else
-                            {
-                                Console.WriteLine("[NN SELF-TEST] No statistically significant repeating pattern detected.");
-                            }
-                        }
-                    }
-
-
-                    if (_isScrapingMode)
-                    {
-                        bool anyRepeatedPattern = false;
-                        Console.WriteLine("\n--- Scraping Recognition Report (Repeated Patterns Only) ---");
-                        var repeatedSums = patternSumOccurrences.Where(kvp => kvp.Value > 1).Select(kvp => kvp.Key).ToList();
-                        for (int partnerId = 0; partnerId < nnProcessors.Count; partnerId++)
-                        {
-                            var processor = nnProcessors[partnerId];
-                            var recognizedRepeated = processor.GetRecognizedPatternSums().Where(s => repeatedSums.Contains(s)).ToList();
-
-                            if (recognizedRepeated.Count > 0)
-                            {
-                                anyRepeatedPattern = true;
-                                Console.ForegroundColor = ConsoleColor.Green;
-                                Console.WriteLine($"[P{partnerId}] Recognized Repeated Pattern Sums: {string.Join(", ", recognizedRepeated)} (Count: {recognizedRepeated.Count})");
-                                Console.ResetColor();
-                            }
-                            else
-                            {
-                                Console.ForegroundColor = ConsoleColor.Yellow;
-                                Console.WriteLine($"[P{partnerId}] No repeated patterns recognized.");
-                                Console.ResetColor();
-                            }
-                        }
-                        if (!anyRepeatedPattern)
-                        {
-                            Console.ForegroundColor = ConsoleColor.Yellow;
-                            Console.WriteLine("No repeated patterns were recognized or stored by any NN processor during scraping.");
-                            Console.ResetColor();
-                        }
-                        Console.WriteLine("-----------------------------------");
-                    }
-
-
-
-                    // Find the first partner (ID > 0) that has stored memory to guarantee a success path
-                    for (int i = 1; i < nnProcessors.Count; i++)
-                    {
-                        if (nnProcessors[i].HasKnownPatterns())
-                        {
-                            generator = nnProcessors[i];
-                            partnerToTest = i;
-                            break;
-                        }
-                    }
-
-                    // 5. Generative Self-Test (NN Generation Mode)
                     if (!_isScrapingMode) // Nur im Generierungsmodus ausführen!
                     {
-
                         // Find the first partner (ID > 0) that has stored memory to guarantee a success path
                         for (int i = 1; i < nnProcessors.Count; i++)
                         {
@@ -692,13 +590,64 @@ namespace Tracker
                             }
                             }
 
+                            if (generator != null && patternSumOccurrences.Count > 0)
+                            {
+                                // Finde die am häufigsten vorkommende Pattern-Summe (repeating pattern)
+                                var mostRepeated = patternSumOccurrences
+                                    .Where(kvp => kvp.Value > 1)
+                                    .OrderByDescending(kvp => kvp.Value)
+                                    .FirstOrDefault();
+
+                                if (mostRepeated.Key > 0)
+                                {
+                                    // Berechne die Wahrscheinlichkeit für das häufigste Muster
+                                    int totalSamples = patternSumOccurrences.Values.Sum();
+                                    double probMostRepeated = (double)mostRepeated.Value / totalSamples;
+
+                                    // Berechne die Wahrscheinlichkeit für alle anderen Muster
+                                    var otherPatterns = patternSumOccurrences.Where(kvp => kvp.Key != mostRepeated.Key && kvp.Value > 0);
+                                    double maxOtherProb = otherPatterns.Any() ? otherPatterns.Max(kvp => (double)kvp.Value / totalSamples) : 0;
+
+                                    // Nur wenn das häufigste Muster signifikant häufiger ist als alle anderen
+                                    if (probMostRepeated > maxOtherProb)
+                                    {
+                                        int[] repeatingVector = Enumerable.Repeat(-1, MAX_PATTERN_LENGTH).ToArray();
+                                        repeatingVector[0] = mostRepeated.Key;
+                                        nn.IO repeatingPattern = new nn.IO { IOVECTOR = repeatingVector };
+
+                                        int matchCount = generator.GetPossibilitySpaceCount(repeatingPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
+                                        Console.Write($"[NN SELF-TEST] Repeating Pattern: {mostRepeated.Key} (Count: {mostRepeated.Value}) -> ");
+                                        if (matchCount > 0)
+                                        {
+                                            Console.ForegroundColor = ConsoleColor.Green;
+                                            Console.WriteLine("REPEATING PATTERN SUCCESSFULLY RECOGNIZED!");
+                                            Console.ResetColor();
+                                        }
+                                        else
+                                        {
+                                            Console.ForegroundColor = ConsoleColor.Yellow;
+                                            Console.WriteLine("Repeating pattern was NOT recognized.");
+                                            Console.ResetColor();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine("[NN SELF-TEST] No statistically significant repeating pattern detected.");
+                                    }
+                                }
+                            }
+
+                            // Der bisherige generative Test für Subspace-Pattern bleibt unverändert
                             if (generator != null)
                             {
                                 Console.WriteLine($"\n--- Generative Self-Test (Partner {partnerToTest}) ---");
-                                // Generate a pattern from a *subspace* of possible patterns (now using max optimality)
+                                Console.WriteLine($"[RESOURCE USAGE] Partner {partnerToTest} stores {generator.GetStoredPatternCount()} unique pattern sums.");
+                                foreach (var sum in generator.GetRecognizedPatternSums())
+                                {
+                                    Console.WriteLine($"    - Pattern Sum: {sum}");
+                                }
                                 nn.IO generatedPattern = generator.GenerateKnownPattern(partnerToTest);
 
-                                // Test the generated pattern against its own memory (Self-Test)
                                 int matchCount = generator.GetPossibilitySpaceCount(generatedPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
                                 int generatedSum = generatedPattern.IOVECTOR.Where(id => id > 0).Sum();
 
