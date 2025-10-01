@@ -4,733 +4,230 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Tracker.nn;
+using Tracker.Filters;
 
-// =========================================================================
-// 1. NN DEFINITION (TRACKER.NN) - ASSOCIATIVE MEMORY NOW USES RAW SUM AS KEY (NO HASHING)
-// =========================================================================
-namespace Tracker.nn
-{
-    // --- Data Transfer Object for NN Input/Output ---
-    public class IO
-    {
-        // Repräsentiert die Ein-/Ausgabe-Pattern-Sequenz (z. B. Wort-IDs oder Platzhalter -1)
-        public int[] IOVECTOR { get; set; } = Array.Empty<int>();
-    }
-
-    // --- Core Processor for CQH-TED Associative Memory ---
-    public class MainProcessor
-    {
-
-        public IEnumerable<int> GetRecognizedPatternSums()
-        {
-            return AssociativeMemory.Keys.Where(k => k > 0);
-        }
-        public List<IO> inputseries = new List<IO>();
-        public List<IO> outputseries = new List<IO>();
-
-        // AssociativeMemory keyed only by the Raw Pattern Sum.
-        // Key: Pattern Sum (int) -> Value: List of stored internal switch configurations (mock int[])
-        private Dictionary<int, List<int[]>> AssociativeMemory = new Dictionary<int, List<int[]>>();
-        private readonly Random _random = new Random();
-
-        // Interne Switch-Konfigurationen (Mock-Speicher nur zur Initialisierung)
-        private int _numDimensions;
-        private int _numContexts;
-        private int _numTimes;
-        private int _maxPatternLength;
-
-        /// <summary>
-        /// Initialisiert die Basisparameter für die NN-Architektur (M, C, T, L).
-        /// </summary>
-        public void InitializeSwitches(int numDimensions, int numContexts, int numTimes, int maxPatternLength)
-        {
-            _numDimensions = numDimensions;
-            _numContexts = numContexts;
-            _numTimes = numTimes;
-            _maxPatternLength = maxPatternLength;
-            Console.WriteLine($"[NN] Initialized Processor with D={numDimensions}, C={numContexts}, T={numTimes}, L={maxPatternLength}");
-        }
-
-        /// <summary>
-        /// Simuliert das komplexe assoziative Pattern-Training (C-A PTA) und speichert es in der M-Matrix.
-        /// </summary>
-        // NOTE: Verbose Flag entfernt, um exzessive Logs im $2^{12}$ Loop zu verhindern.
-        public void BruteForceCombinatorially(bool bruteForceContext, int partnerId)
-        {
-            var uniqueSums = new HashSet<int>();
-            foreach (var pattern in inputseries)
-            {
-                int rawSum = pattern.IOVECTOR.Where(id => id > 0).Sum();
-                if (rawSum > 0 && uniqueSums.Add(rawSum))
-                {
-                    int patternKey = rawSum;
-                    if (!AssociativeMemory.ContainsKey(patternKey))
-                    {
-                        AssociativeMemory[patternKey] = new List<int[]>();
-                    }
-                    // Dynamisch: Speichere die tatsächliche IOVECTOR als Switch-Konfiguration
-                    AssociativeMemory[patternKey].Add(pattern.IOVECTOR.ToArray());
-                }
-            }
-        }
-
-        /// <summary>
-        /// Checks if this processor has any known patterns stored in its Associative Memory.
-        /// </summary>
-        public bool HasKnownPatterns()
-        {
-            // Prüft, ob positive Summen im Speicher existieren.
-            return AssociativeMemory.Keys.Any(k => k > 0);
-        }
-
-        /// <summary>
-        /// Gets the count of unique pattern sums stored in the Associative Memory.
-        /// </summary>
-        public int GetStoredPatternCount()
-        {
-            // Count keys that represent actual patterns (sum > 0)
-            return AssociativeMemory.Keys.Count(k => k > 0);
-        }
-
-        /// <summary>
-        /// Simuliert die T_diag-Diagnose (Vorhersage/Test).
-        /// </summary>
-        /// <returns>Die Anzahl der internen Switch-Kombinationen, die mit dem Muster übereinstimmen.</returns>
-        public int GetPossibilitySpaceCount(IO testInput, bool bruteForceContext, int partnerId)
-        {
-            // Summe der Nicht-Placeholder-IDs
-            int rawSum = testInput.IOVECTOR.Where(id => id > 0).Sum();
-            int patternKey = rawSum;
-
-            if (AssociativeMemory.ContainsKey(patternKey))
-            {
-                // Die Anzahl der Match-Kombinationen wird durch die Anzahl der internen Speicherungen multipliziert
-                return AssociativeMemory[patternKey].Count * (bruteForceContext ? _numContexts : 1);
-            }
-
-            return 0; // Nicht erkannt
-        }
-
-        /// <summary>
-        /// Simuliert den Pattern-Generierungsmodus des NNs.
-        /// Generiert ein Muster, das auf der Grundlage des gespeicherten Associative Memory (M) erkannt werden kann.
-        /// </summary>
-        public IO GenerateKnownPattern(int partnerId)
-        {
-            // 1. Finde die Summe eines bekannten Musters 
-            int knownPatternSum = AssociativeMemory.Keys
-                .Where(s => s > 0) // Nur gültige (positive) Mustersummen betrachten
-                .FirstOrDefault();
-
-            if (knownPatternSum > 0)
-            {
-                // 2. [OPTIMALITY MODE: EASIEST RECOGNITION] 
-                int[] generatedVector = Enumerable.Repeat(-1, _maxPatternLength).ToArray();
-
-                // Platziere die gesamte Summe in einem zufälligen Slot
-                int singleSlotIndex = _random.Next(0, _maxPatternLength);
-                generatedVector[singleSlotIndex] = knownPatternSum;
-
-                return new IO { IOVECTOR = generatedVector };
-            }
-
-            // Fallback: Leeres oder generisches Muster
-            return new IO { IOVECTOR = Enumerable.Repeat(-1, _maxPatternLength).ToArray() };
-        }
-    }
-}
-
-// =========================================================================
-// 2. CORE ENGINE AND PROGRAM LOGIC (TRACKER) - VERBOSE & ROBUSTNESS ENHANCED
-// =========================================================================
 namespace Tracker
 {
-    // Class containing the data structures formerly in Form1
     public static class IdManager
     {
-        public static int Id = 1;
-        public static int GetId() { return Id++; }
+        private static int _id = 1;
+        public static int GetId() => _id++;
     }
 
     public class Pattern
     {
-        public List<int> patternsequence = new List<int>();
+        public List<int> Sequence { get; } = new();
     }
 
-    // --- CONVERSATION TREE LOGIC ---
     public class ConversationTree
     {
-        public List<ConversationTree> Children = new List<ConversationTree>();
-        public Pattern NodePattern;
+        public List<ConversationTree> Children { get; } = new();
+        public Pattern NodePattern { get; set; }
 
-        /// <summary>
-        /// Recursively generates the conversation tree by combining available patterns.
-        /// </summary>
-        public void BruteForce(List<Pattern> availablePatterns)
+        public void BuildTree(List<Pattern> patterns)
         {
-            foreach (var p in availablePatterns)
+            foreach (var pattern in patterns)
             {
-                ConversationTree child = new ConversationTree();
-                child.NodePattern = p;
+                var child = new ConversationTree { NodePattern = pattern };
                 Children.Add(child);
-
-                var newAvailablePatterns = new List<Pattern>(availablePatterns);
-                newAvailablePatterns.Remove(p);
-
-                child.BruteForce(newAvailablePatterns);
+                var remaining = patterns.Where(p => p != pattern).ToList();
+                child.BuildTree(remaining);
             }
+        }
+    }
+
+    public class FilterEngine
+    {
+        private readonly List<PatternFilter> _filters = new();
+
+        public void AddFilter(PatternFilter filter) => _filters.Add(filter);
+
+        public IO Process(IO input)
+        {
+            foreach (var filter in _filters)
+                input = filter.Apply(input);
+            return input;
         }
     }
 
     public class TrackerEngine
     {
-        // --- GLOBAL DEBUG FLAG ---
-        public const bool VERBOSE_DEBUG = true;
-
-        // --- CQH-TED CORE COMPONENTS ---
-        public List<nn.MainProcessor> nnProcessors = new List<nn.MainProcessor>();
-        private static readonly HttpClient httpClient = new HttpClient();
-        private readonly Random _random = new Random();
-
-        // Stores the current operation mode
-        private readonly bool _isScrapingMode;
-
-        // CQH-TED NN Parameters (MAXIMIZED CAPACITY)
-        private const int NUM_DIMENSIONS = 3;
-        private const int NUM_CONTEXTS = 2;
-        private const int NUM_TIMES = 1;
-        private const int MAX_PATTERN_LENGTH = 100; // Maximale Länge des Musters
-        private const int TARGET_PARTNER_ID = 0;
-        private const int MAX_COMBINATORIAL_PATTERNS = 50; // Anzahl der Patterns für die 2^n Zuordnung
-        private const bool BRUTE_FORCE_CONTEXT = true;
-        private const int WORD_LIMIT_N = 100; // Anzahl der Wörter pro Zyklus
+        private const int MaxPatternLength = 100;
         private const int MAX_SCRAPE_RETRIES = 3;
-        private const int MAX_DYNAMIC_PARTNERS = 32; // Maximale Anzahl von Partnern
+        private readonly HttpClient httpClient = new();
+        private readonly List<nn.MainProcessor> _processors = new();
+        private readonly Dictionary<string, int> _wordToId = new();
+        private readonly Pattern _totalPattern = new();
+        private readonly List<Pattern> _subpatterns = new();
+        private readonly Random _random = new();
+        private readonly string _url;
+        private readonly bool _scrapingMode;
+        public CancellationTokenSource Cancellation { get; } = new();
 
-        // --- NEW: Minimum required Partners ---
-        private const int MIN_PARTNERS_INITIAL = 4; // Ensure minimum 4 partners are always initialized
-
-        // Konfiguration für die T_diag Abdeckung
-        private const int T_DIAG_TEST_SAMPLE_SIZE = 200;
-
-        // Sicherheitslimit fuer die bitweise Mustergenerierung (2^N Permutationen)
-        private const int MAX_BITWISE_COMPLEXITY = 20; // Max. 2^20 Subpatterns
-
-        // Begrenzung der tatsächlichen Iterationen der C-A PTA (FÜR STABILITÄT REDUZIERT)
-        private const long MAX_C_A_PTA_ITERATIONS = 1L << 12; // NEU: 2^12 = 4,096 Iterationen
-
-        // --- Data Structures ---
-        public Dictionary<string, int> stringToIdMapping = new Dictionary<string, int>();
-        public Pattern totalPattern = new Pattern();
-        public List<Pattern> subpatterns = new List<Pattern>();
-
-        private string _currentUrl = "https://example.com";
-        public CancellationTokenSource cts { get; private set; }
-
-        /// <summary>
-        /// Constructor now accepts the operation mode.
-        /// </summary>
-        public TrackerEngine(string url, bool isScrapingMode)
+        public TrackerEngine(string url, bool scrapingMode)
         {
-            cts = new CancellationTokenSource();
-            _currentUrl = url;
-            _isScrapingMode = isScrapingMode;
-
-            httpClient.Timeout = TimeSpan.FromSeconds(10);
-
-            // Initialized with a minimum of 4 dedicated NN processors to enforce specialization
-            for (int i = 0; i < MIN_PARTNERS_INITIAL; i++)
-            {
-                var processor = new nn.MainProcessor();
-                processor.InitializeSwitches(
-                    NUM_DIMENSIONS,
-                    NUM_CONTEXTS,
-                    NUM_TIMES,
-                    MAX_PATTERN_LENGTH
-                );
-                nnProcessors.Add(processor);
-            }
+            _url = url;
+            _scrapingMode = scrapingMode;
+            for (int i = 0; i < 4; i++)
+                _processors.Add(new nn.MainProcessor());
         }
 
-        /// <summary>
-        /// Generates subpatterns by inserting -1 placeholders (L_exploit Synthesis).
-        /// </summary>
-        public void RecalculateSubpatterns()
+        public async Task RunAsync(CancellationToken token)
         {
-            subpatterns.Clear();
-            int n = totalPattern.patternsequence.Count;
-            if (n == 0) return;
-
-            // Die maximale Anzahl der IDs, die fuer die Permutation verwendet werden, ist begrenzt
-            int effectiveN = Math.Min(n, MAX_BITWISE_COMPLEXITY);
-
-            if (effectiveN < n)
-            {
-                Console.WriteLine($"[L_EXPLOIT WARNING] Bitwise permutation complexity limited to the first {MAX_BITWISE_COMPLEXITY} IDs (2^{MAX_BITWISE_COMPLEXITY} patterns) to prevent system freeze.");
-            }
-
-            long patternCount = 1L << effectiveN; // Verwenden von long für die große Anzahl von Permutationen
-            for (long i = 1; i < patternCount; i++) // Start at 1 to ensure at least one ID is present
-            {
-                Pattern p = new Pattern();
-                for (int j = 0; j < effectiveN; j++)
-                {
-                    // Check if the j-th word ID should be included in this subpattern (based on the bitmask i)
-                    if ((i & (1L << j)) != 0)
-                    {
-                        p.patternsequence.Add(totalPattern.patternsequence[j]);
-                    }
-                    else
-                    {
-                        // Placeholder for the missing word ID
-                        p.patternsequence.Add(-1);
-                    }
-                }
-
-                // Fill the remaining length with placeholders bis MAX_PATTERN_LENGTH erreicht ist
-                while (p.patternsequence.Count < MAX_PATTERN_LENGTH)
-                {
-                    p.patternsequence.Add(-1);
-                }
-                subpatterns.Add(p);
-            }
-
-            // VERBOSE OUTPUT: Show full source pattern and the most complete generated subpattern
-            Console.WriteLine($"[L_EXPLOIT] Source Total Pattern (Raw IDs, first 5): {string.Join(",", totalPattern.patternsequence.Take(5))}, ... (Total IDs: {n})");
-            Console.WriteLine($"[L_EXPLOIT] Total subpatterns generated: {subpatterns.Count} (Based on 2^{effectiveN} permutation).");
-            if (subpatterns.Count > 0)
-            {
-                // Print the subpattern that contains the maximum possible information (the last one generated)
-                var maxPattern = subpatterns.Last().patternsequence;
-                int maxPatternSum = maxPattern.Where(id => id > 0).Sum();
-                Console.WriteLine($"[L_EXPLOIT] Max-Info Subpattern: {string.Join(",", maxPattern.Take(5))}, ... (Total Length: {maxPattern.Count}, Sum: {maxPatternSum})");
-            }
-        }
-
-        /// <summary>
-        /// Collects all unique, raw patterns from the generated tree for combinatorial assignment.
-        /// </summary>
-        private List<Pattern> CollectRawPatterns(ConversationTree root)
-        {
-            var rawPatterns = new List<Pattern>();
-            var queue = new Queue<ConversationTree>();
-            queue.Enqueue(root);
-
-            while (queue.Count > 0)
-            {
-                var node = queue.Dequeue();
-                if (node.NodePattern != null)
-                {
-                    rawPatterns.Add(node.NodePattern);
-                }
-                foreach (var child in node.Children)
-                {
-                    queue.Enqueue(child);
-                }
-            }
-            return rawPatterns.Take(MAX_COMBINATORIAL_PATTERNS).ToList();
-        }
-
-        /// <summary>
-        /// Core Partner Brute-Force and Training Logic (C-A PTA).
-        /// This brute-forces the assignment of each raw pattern to one of the available partners.
-        /// </summary>
-        private void BruteForceAndTrainAllPartners(List<Pattern> rawPatterns)
-        {
-            int n = rawPatterns.Count;
-            if (n == 0) return;
-
-            // 1. Calculate P: Dynamic Partner Count based on unambiguous units
-            var allUniqueIds = new HashSet<int>();
-            foreach (var p in rawPatterns)
-            {
-                // Find all non-placeholder IDs (unambiguous units)
-                foreach (var id in p.patternsequence.Where(id => id > 0))
-                {
-                    allUniqueIds.Add(id);
-                }
-            }
-
-            // P must be at least MIN_PARTNERS_INITIAL, and capped by MAX_DYNAMIC_PARTNERS
-            int dynamicPartnerCount = Math.Max(allUniqueIds.Count, MIN_PARTNERS_INITIAL);
-            dynamicPartnerCount = Math.Min(dynamicPartnerCount, MAX_DYNAMIC_PARTNERS);
-
-            // 2. Dynamic Partner Provisioning
-            while (nnProcessors.Count < dynamicPartnerCount)
-            {
-                var newProcessor = new nn.MainProcessor();
-                newProcessor.InitializeSwitches(NUM_DIMENSIONS, NUM_CONTEXTS, NUM_TIMES, MAX_PATTERN_LENGTH);
-                nnProcessors.Add(newProcessor);
-            }
-            Console.WriteLine($"[C-A PTA] Dynamic Partner Count (P): {dynamicPartnerCount}.");
-
-
-            // FIX: Verwenden von long, um Überlauf zu vermeiden und die theoretische Zahl zu melden
-            long theoreticalCombinations = 1L << n;
-            // Begrenzung der tatsächlichen Ausführung auf $2^{12}$ Iterationen
-            long executionLimit = Math.Min(theoreticalCombinations, MAX_C_A_PTA_ITERATIONS);
-
-            Console.WriteLine($"[C-A PTA] Starting Brute Force on {n} patterns (Theoretical Max: 2^{n} = {theoreticalCombinations} combinations).");
-            Console.WriteLine($"[C-A PTA] Executing a representative sample of {executionLimit} iterations for system stability.");
-
-            for (long i = 0; i < executionLimit; i++) // Iteration mit long
-            {
-                // Clear Training Data for all active partners
-                for (int k = 0; k < dynamicPartnerCount; k++)
-                {
-                    nnProcessors[k].inputseries.Clear();
-                    nnProcessors[k].outputseries.Clear();
-                }
-
-                // Apply current combinatorial assignment (brute-forcing 2^n assignments)
-                for (int j = 0; j < n; j++)
-                {
-                    int sum = rawPatterns[j].patternsequence.Where(id => id > 0).Sum();
-                    int assignedPartner = ((sum * 31) + j) % dynamicPartnerCount; // 31 als Primzahl für bessere Streuung
-
-                    var patternSum = sum;
-                    if (!nnProcessors[assignedPartner].inputseries.Any(io => io.IOVECTOR.Where(id => id > 0).Sum() == patternSum))
-                    {
-                        nn.IO ioPattern = new nn.IO { IOVECTOR = rawPatterns[j].patternsequence.ToArray() };
-                        nnProcessors[assignedPartner].inputseries.Add(ioPattern);
-                        nnProcessors[assignedPartner].outputseries.Add(ioPattern);
-                    }
-                }
-
-                // Brute-force internal switches for all P active partners
-                for (int k = 0; k < dynamicPartnerCount; k++)
-                {
-                    // Trainiere und logge nur, wenn Partner Daten hat
-                    if (nnProcessors[k].inputseries.Any())
-                    {
-                        nnProcessors[k].BruteForceCombinatorially(BRUTE_FORCE_CONTEXT, k);
-                    }
-                }
-
-                // Optional: Kurzer Log-Fortschritt (Wird nur für größere Limits > 10000 geloggt)
-                if (VERBOSE_DEBUG && executionLimit > 10000 && i % 10000 == 0 && i > 0)
-                {
-                    Console.WriteLine($"[C-A PTA Progress] Iteration {i}/{executionLimit} completed.");
-                }
-            }
-
-            Console.WriteLine($"[C-A PTA] Combinatorial Assignment Complete: Processed {executionLimit} partner scenarios using {dynamicPartnerCount} processors.");
-        }
-
-        /// <summary>
-        /// Main asynchronous tracking and reverse engineering loop.
-        /// </summary>
-        public Dictionary<int,int> patternSumOccurrences = new Dictionary<int, int>();
-        public async Task ContinuousReverseEngineeringLoopAsync(CancellationToken token)
-        {
-            Console.WriteLine($"\n--- CQH-TED Engine START (N={WORD_LIMIT_N} Constraint) ---");
-            Console.WriteLine($"Mode: {(_isScrapingMode ? "Web Scraping (S)" : "Pattern Generation (G)")}, Debug: {VERBOSE_DEBUG}");
-            Console.WriteLine($"Context Brute-Force Status: {(BRUTE_FORCE_CONTEXT ? "Active" : "Disabled (Context 0 Only)")}\n");
-
+            int iteration = 0;
             while (!token.IsCancellationRequested)
             {
-                try
-                {
-                    Console.WriteLine($"\n--- Cycle Starting ({DateTime.Now.ToLongTimeString()}) ---");
+                iteration++;
+                Console.WriteLine($"\n--- Iteration {iteration} ---");
+                var words = _scrapingMode
+                    ? await ScrapeWebPageAsync(_url, MaxPatternLength)
+                    : GenerateMockWords(MaxPatternLength);
 
-                    // 1. Pattern Tracking (Data Acquisition)
-                    List<string> newWords;
-                    if (_isScrapingMode)
+                Console.WriteLine($"Wörter ({words.Count}): {string.Join(", ", words)}");
+
+                foreach (var word in words)
+                {
+                    if (!_wordToId.ContainsKey(word))
                     {
-                        newWords = await ScrapeWebPageAsync(_currentUrl, WORD_LIMIT_N);
+                        _wordToId[word] = IdManager.GetId();
+                        Console.WriteLine($"Neues Wort erkannt: '{word}' -> ID {_wordToId[word]}");
+                    }
+                    _totalPattern.Sequence.Add(_wordToId[word]);
+                }
+
+                Console.WriteLine($"Pattern-Länge: {_totalPattern.Sequence.Count}");
+                Console.WriteLine("Pattern-IDs: " + string.Join(", ", _totalPattern.Sequence));
+
+                RecalculateSubpatterns();
+                Console.WriteLine($"Subpattern-Anzahl: {_subpatterns.Count}");
+
+                // Noise in die Zeitreihe einfügen
+                var noisyVector = _totalPattern.Sequence
+                    .Select(id => id + (int)Math.Round((_random.NextDouble() - 0.5) * 2)) // ±1 Noise
+                    .ToArray();
+
+                Console.WriteLine("Noisy Pattern-IDs: " + string.Join(", ", noisyVector));
+
+                // Muster als IO in Prozessoren einspeisen (Trainingsschritt)
+                var ioNoisy = new IO { IOVECTOR = noisyVector };
+                foreach (var processor in _processors)
+                {
+                    processor.inputseries.Add(ioNoisy);
+                }
+
+                // Für die Prediction das unveränderte Pattern verwenden
+                var ioClean = new IO { IOVECTOR = _totalPattern.Sequence.ToArray() };
+
+                for (int i = 0; i < _processors.Count; i++)
+                {
+                    Console.WriteLine($"Prozessor {i}: gespeicherte Patterns = {_processors[i].GetStoredPatternCount()}");
+                    if (_processors[i].HasKnownPatterns())
+                    {
+                        var sums = _processors[i].GetRecognizedPatternSums().ToList();
+                        Console.WriteLine($"Prozessor {i}: Pattern-Summen = {string.Join(", ", sums)}");
+                        Console.WriteLine($"Prozessor {i}: Prediction (clean) = [{string.Join(", ", ioClean.IOVECTOR)}]");
+                        
+                        var cleanWords = TranslateIdsToWords(ioClean.IOVECTOR);
+                        Console.WriteLine($"Prozessor {i}: Prediction (clean, Wörter) = [{string.Join(", ", cleanWords)}]");
+
+                        // Wahrscheinlichkeit berechnen und anzeigen
+                        double probability = 0;
+                        if (_processors[i].GetStoredPatternCount() > 0)
+                        {
+                            // Beispiel: Anteil der IDs im clean-Pattern, die im gespeicherten Pattern vorkommen
+                            var storedIds = _processors[i].inputseries.SelectMany(io => io.IOVECTOR).ToHashSet();
+                            int matchCount = ioClean.IOVECTOR.Count(id => storedIds.Contains(id));
+                            probability = (double)matchCount / ioClean.IOVECTOR.Length;
+                        }
+                        Console.WriteLine($"Prozessor {i}: Wahrscheinlichkeit (clean) = {probability:P2}");
                     }
                     else
                     {
-                        // Verwendung des einfachen Musters: Ein Wort, das sich 100 Mal wiederholt
-                        newWords = GenerateMockWords(WORD_LIMIT_N);
+                        Console.WriteLine($"Prozessor {i}: Keine bekannten Patterns für Prediction.");
                     }
-
-                    if (newWords.Count == 0)
-                    {
-                        Console.WriteLine("Warning: No new words acquired. Continuing to next cycle...");
-                        await Task.Delay(500, token);
-                        continue;
-                    }
-
-                    foreach (var word in newWords)
-                    {
-                        int newid = IdManager.GetId();
-                        stringToIdMapping[word] = newid;
-                        totalPattern.patternsequence.Add(newid);
-                        //Console.WriteLine($"[TRACK] Added Word '{word}' (ID: {newid})");
-                        int sum = newid; // oder Summe der IDs für komplexere Patterns
-                        if (!patternSumOccurrences.ContainsKey(sum))
-                            patternSumOccurrences[sum] = 0;
-                        patternSumOccurrences[sum]++;
-                    }
-
-                    // 2. L_exploit Synthesis (Conversation Tree Logic)
-                    RecalculateSubpatterns();
-                    ConversationTree tree = new ConversationTree();
-
-                    // Limit the number of subpatterns used for the combinatorial conversation tree generation
-                    const int MAX_PATTERNS_TO_PERMUTE = 5;
-                    var patternsToPermute = subpatterns.Take(MAX_PATTERNS_TO_PERMUTE).ToList();
-
-                    if (patternsToPermute.Count == 0)
-                    {
-                        Console.WriteLine("[L_EXPLOIT] No patterns available for permutation.");
-                        await Task.Delay(500, token);
-                        continue;
-                    }
-
-                    Console.WriteLine($"[L_EXPLOIT] Permuting {patternsToPermute.Count} patterns to build Conversation Tree.");
-                    tree.BruteForce(patternsToPermute);
-
-                    var rawPatterns = CollectRawPatterns(tree);
-                    // The count reported here will be the total number of unique nodes in the generated tree.
-                    Console.WriteLine($"[L_EXPLOIT] Using {rawPatterns.Count} patterns for C-A PTA (Max: {MAX_COMBINATORIAL_PATTERNS}).");
-
-                    // 3. C-A PTA Training 
-                    BruteForceAndTrainAllPartners(rawPatterns);
-
-                    // 4. T_diag Diagnosis (Comprehensive Pattern Testing)
-                    if (subpatterns.Count > 0)
-                    {
-                        Console.WriteLine($"\n[T_DIAG] Starting Comprehensive Diagnosis (Testing first {T_DIAG_TEST_SAMPLE_SIZE} subpatterns)...");
-
-                        int totalTests = 0;
-                        int totalContainmentTriggers = 0;
-
-                        // Test a representative sample of patterns against all partners
-                        foreach (var pattern in subpatterns.Take(T_DIAG_TEST_SAMPLE_SIZE))
-                        {
-                            int[] testVector = pattern.patternsequence.ToArray();
-                            nn.IO testInput = new nn.IO { IOVECTOR = testVector };
-                            int patternSum = testVector.Where(id => id > 0).Sum();
-                            totalTests++;
-
-                            bool patternFound = false;
-
-                            // Query ALL active partner models
-                            for (int partnerId = 0; partnerId < nnProcessors.Count; partnerId++)
-                            {
-                                nn.MainProcessor currentProcessor = nnProcessors[partnerId];
-
-                                int matchCount = currentProcessor.GetPossibilitySpaceCount(testInput, BRUTE_FORCE_CONTEXT, partnerId);
-
-                                if (matchCount > 0)
-                                {
-                                    patternFound = true;
-                                    totalContainmentTriggers++;
-                                    if (VERBOSE_DEBUG)
-                                    {
-                                        Console.WriteLine($"      [T_DIAG HIT] Pattern Sum {patternSum} matched by P{partnerId} (Match Count: {matchCount}).");
-                                    }
-                                    break;
-                                }
-                            }
-
-                            // Loggen Sie das Ergebnis für das Max-Info Pattern separat für Klarheit
-                            if (pattern == subpatterns.Last() && patternFound)
-                            {
-                                Console.ForegroundColor = ConsoleColor.Red;
-                                Console.WriteLine($"\n[T_DIAG] MAX-INFO Pattern (Sum {patternSum}) CONTAINMENT TRIGGERED.");
-                                Console.ResetColor();
-                            }
-                        }
-
-                        // Summary Report
-                        Console.WriteLine("\n--- T_DIAG Summary ---");
-                        Console.WriteLine($"Tested {Math.Min(T_DIAG_TEST_SAMPLE_SIZE, subpatterns.Count)} Subpatterns in total.");
-                        Console.WriteLine($"Total Containment Events Triggered: {totalContainmentTriggers}");
-
-                        if (totalContainmentTriggers > 0)
-                        {
-                            Console.WriteLine($"-> Diagnosis: Multiple sub-spaces recognized across the {nnProcessors.Count} partners.");
-                        }
-                        else
-                        {
-                            Console.WriteLine("-> Diagnosis: No trained patterns matched the test sample (Sum Key Missing).");
-                        }
-                        Console.WriteLine("----------------------");
-                    }
-
-                    // 4.5 Partner Specialization Summary
-                    Console.WriteLine($"\n--- Partner Specialization Summary ({nnProcessors.Count} Active Processors) ---");
-                    for (int partnerId = 0; partnerId < nnProcessors.Count; partnerId++)
-                    {
-                        var processor = nnProcessors[partnerId];
-                        int patternCount = processor.GetStoredPatternCount();
-
-                        Console.WriteLine($"[P{partnerId}] Stored Unique Pattern Sums: {patternCount}");
-                    }
-
-                    // Nach T_DIAG Diagnosis und Partner Specialization Summary
-                    nn.MainProcessor generator = null;
-                    int partnerToTest = -1;
-
-                    // Find the first partner (ID > 0) that has stored memory to guarantee a success path
-                    for (int i = 1; i < nnProcessors.Count; i++)
-                    {
-                        if (nnProcessors[i].HasKnownPatterns())
-                        {
-                            generator = nnProcessors[i];
-                            partnerToTest = i;
-                            break;
-                        }
-                    }
-
-                    // --- Ergänzung im Generative Self-Test (NN Generation Mode) ---
-                    if (!_isScrapingMode) // Nur im Generierungsmodus ausführen!
-                    {
-                        // Find the first partner (ID > 0) that has stored memory to guarantee a success path
-                        for (int i = 1; i < nnProcessors.Count; i++)
-                        {
-                            if (nnProcessors[i].HasKnownPatterns())
-                            {
-                                generator = nnProcessors[i];
-                                partnerToTest = i;
-                                break;
-                            }
-                            }
-
-                            if (generator != null && patternSumOccurrences.Count > 0)
-                            {
-                                // Finde die am häufigsten vorkommende Pattern-Summe (repeating pattern)
-                                var mostRepeated = patternSumOccurrences
-                                    .Where(kvp => kvp.Value > 1)
-                                    .OrderByDescending(kvp => kvp.Value)
-                                    .FirstOrDefault();
-
-                                if (mostRepeated.Key > 0)
-                                {
-                                    // Berechne die Wahrscheinlichkeit für das häufigste Muster
-                                    int totalSamples = patternSumOccurrences.Values.Sum();
-                                    double probMostRepeated = (double)mostRepeated.Value / totalSamples;
-
-                                    // Berechne die Wahrscheinlichkeit für alle anderen Muster
-                                    var otherPatterns = patternSumOccurrences.Where(kvp => kvp.Key != mostRepeated.Key && kvp.Value > 0);
-                                    double maxOtherProb = otherPatterns.Any() ? otherPatterns.Max(kvp => (double)kvp.Value / totalSamples) : 0;
-
-                                    // Nur wenn das häufigste Muster signifikant häufiger ist als alle anderen
-                                    if (probMostRepeated > maxOtherProb)
-                                    {
-                                        int[] repeatingVector = Enumerable.Repeat(-1, MAX_PATTERN_LENGTH).ToArray();
-                                        repeatingVector[0] = mostRepeated.Key;
-                                        nn.IO repeatingPattern = new nn.IO { IOVECTOR = repeatingVector };
-
-                                        int matchCount = generator.GetPossibilitySpaceCount(repeatingPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
-                                        Console.Write($"[NN SELF-TEST] Repeating Pattern: {mostRepeated.Key} (Count: {mostRepeated.Value}) -> ");
-                                        if (matchCount > 0)
-                                        {
-                                            Console.ForegroundColor = ConsoleColor.Green;
-                                            Console.WriteLine("REPEATING PATTERN SUCCESSFULLY RECOGNIZED!");
-                                            Console.ResetColor();
-                                        }
-                                        else
-                                        {
-                                            Console.ForegroundColor = ConsoleColor.Yellow;
-                                            Console.WriteLine("Repeating pattern was NOT recognized.");
-                                            Console.ResetColor();
-                                        }
-                                    }
-                                    else
-                                    {
-                                        Console.WriteLine("[NN SELF-TEST] No statistically significant repeating pattern detected.");
-                                    }
-                                }
-                            }
-
-                            // Der bisherige generative Test für Subspace-Pattern bleibt unverändert
-                            if (generator != null)
-                            {
-                                Console.WriteLine($"\n--- Generative Self-Test (Partner {partnerToTest}) ---");
-                                Console.WriteLine($"[RESOURCE USAGE] Partner {partnerToTest} stores {generator.GetStoredPatternCount()} unique pattern sums.");
-                                foreach (var sum in generator.GetRecognizedPatternSums())
-                                {
-                                    Console.WriteLine($"    - Pattern Sum: {sum}");
-                                }
-                                nn.IO generatedPattern = generator.GenerateKnownPattern(partnerToTest);
-
-                                int matchCount = generator.GetPossibilitySpaceCount(generatedPattern, BRUTE_FORCE_CONTEXT, partnerToTest);
-                                int generatedSum = generatedPattern.IOVECTOR.Where(id => id > 0).Sum();
-
-                                Console.Write($"[NN SELF-TEST] Test Subspace Pattern: {string.Join(",", generatedPattern.IOVECTOR.Where(id => id != -1).Take(5))}, ... (Sum: {generatedSum}) -> ");
-
-                                if (matchCount > 0)
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Green;
-                                    Console.WriteLine($"!!! SIMULATED SUCCESS (MAX OPTIMALITY) !!! Model {partnerToTest} successfully recognized its generated SUB-SPACE pattern (Match Count: {matchCount}).");
-                                    Console.ResetColor();
-                                }
-                                else
-                                {
-                                    Console.ForegroundColor = ConsoleColor.Yellow;
-                                    Console.WriteLine("Model failed to recognize its own generated pattern (Unexpected failure - KEY MISMATCH).");
-                                    Console.ResetColor();
-                                }
-                            }
-                            else
-                            {
-                                Console.WriteLine("\n[NN SELF-TEST] Skipping generation: No partners (ID > 0) have stored patterns yet to test.");
-                            }
-                        }
-
-
-                    await Task.Delay(1000, token); // Wait for 1 second before next cycle
                 }
-                catch (OperationCanceledException)
+
+                // Neue Methode in TrackerEngine zum Berechnen einer Wahrscheinlichkeitsmatrix
+                double[,] CalculateTransitionProbabilityMatrix()
                 {
-                    break;
+                    // Alle gespeicherten Muster aus allen Prozessoren zusammenfassen
+                    var allPatterns = _processors.SelectMany(p => p.inputseries).Select(io => io.IOVECTOR).ToList();
+                    if (allPatterns.Count == 0) return new double[0, 0];
+
+                    // Alle IDs, die vorkommen
+                    var uniqueIds = allPatterns.SelectMany(vec => vec).Distinct().OrderBy(id => id).ToList();
+                    int n = uniqueIds.Count;
+                    var idIndex = uniqueIds.Select((id, idx) => (id, idx)).ToDictionary(x => x.id, x => x.idx);
+
+                    // Matrix initialisieren: [von][zu]
+                    double[,] matrix = new double[n, n];
+                    int[,] counts = new int[n, n];
+
+                    // Übergänge zählen
+                    foreach (var vec in allPatterns)
+                    {
+                        for (int i = 0; i < vec.Length - 1; i++)
+                        {
+                            int from = vec[i];
+                            int to = vec[i + 1];
+                            if (idIndex.ContainsKey(from) && idIndex.ContainsKey(to))
+                                counts[idIndex[from], idIndex[to]]++;
+                        }
+                    }
+
+                    // Zeilenweise normalisieren (Wahrscheinlichkeit von jedem "von" zu jedem "zu")
+                    for (int i = 0; i < n; i++)
+                    {
+                        int rowSum = 0;
+                        for (int j = 0; j < n; j++)
+                            rowSum += counts[i, j];
+                        for (int j = 0; j < n; j++)
+                            matrix[i, j] = rowSum > 0 ? (double)counts[i, j] / rowSum : 0;
+                    }
+
+                    return matrix;
                 }
-                catch (Exception ex)
+
+                var probMatrix = CalculateTransitionProbabilityMatrix();
+                if (probMatrix.GetLength(0) > 0)
                 {
-                    Console.ForegroundColor = ConsoleColor.DarkRed;
-                    Console.WriteLine($"[FATAL ERROR] Loop stopped due to exception: {ex.Message}");
-                    Console.ResetColor();
-                    break;
+                    var uniqueIds = _processors.SelectMany(p => p.inputseries).SelectMany(io => io.IOVECTOR).Distinct().OrderBy(id => id).ToList();
+                    Console.WriteLine("Wahrscheinlichkeitsmatrix (Übergang von ID zu ID):");
+                    Console.Write("     ");
+                    foreach (var id in uniqueIds)
+                        Console.Write($"{id,5}");
+                    Console.WriteLine();
+                    for (int i = 0; i < probMatrix.GetLength(0); i++)
+                    {
+                        Console.Write($"{uniqueIds[i],5}");
+                        for (int j = 0; j < probMatrix.GetLength(1); j++)
+                            Console.Write($"{probMatrix[i, j],5:F2}");
+                        Console.WriteLine();
+                    }
                 }
+
+                await Task.Delay(1000, token);
             }
-            Console.WriteLine("\n--- CQH-TED Engine STOPPED ---");
         }
 
-        // --- Scraping and Helper Methods ---
-
-        /// <summary>
-        /// Generates mock words for the Pattern Generation Mode (G).
-        /// Constrained to repeating the same word to simplify pattern sum space.
-        /// </summary>
-        private List<string> GenerateMockWords(int limit)
+        private List<string> GenerateMockWords(int count)
         {
-            var words = new List<string>();
-            const string WORD_A = "PatternW_1";
-            const string WORD_B = "PatternW_2";
-
-            // Continue generating until about half the MAX_PATTERN_LENGTH is reached
-            if (totalPattern.patternsequence.Count < (MAX_PATTERN_LENGTH / 2))
-            {
-                Console.WriteLine($"[MOCK GEN] Generating simple alternating pattern: {WORD_A}, {WORD_B}, {WORD_A}, ...");
-                for (int i = 0; i < limit; i++)
-                {
-                    // Alternating pattern: WORD_A when i is even, WORD_B when i is odd.
-                    if (i % 2 == 0)
-                    {
-                        words.Add(WORD_A);
-                    }
-                    else
-                    {
-                        words.Add(WORD_B);
-                    }
-                }
-            }
-            else
-            {
-                // Once established, stop generating new words or return a small, stable set
-                Console.WriteLine("[MOCK GEN] Pattern established. No new words generated.");
-            }
-            return words;
+            var result = new List<string>();
+            for (int i = 0; i < count; i++)
+                result.Add(i % 2 == 0 ? "A" : "B");
+            return result;
         }
 
+        private async Task<List<string>> GetWordsFromWebAsync(string url, int count)
+        {
+            // Dummy-Implementierung für Demo-Zwecke
+            await Task.Delay(100);
+            return Enumerable.Range(1, count).Select(i => $"Word{i}").ToList();
+        }
 
         private async Task<List<string>> ScrapeWebPageAsync(string url, int limit)
         {
-            // ... (Network logic remains the same) ...
             var words = new List<string>();
 
             for (int retry = 0; retry < MAX_SCRAPE_RETRIES; retry++)
@@ -739,9 +236,8 @@ namespace Tracker
                 {
                     if (retry > 0)
                     {
-                        // SCIENTIFIC ENHANCEMENT: Exponential Backoff
                         int delay = (int)Math.Pow(2, retry) * 1000;
-                        Console.WriteLine($"[SCRAPE RETRY] Attempt {retry + 1}/{MAX_SCRAPE_RETRIES}. Waiting {delay / 1000}s...");
+                        Console.WriteLine($"[SCRAPE RETRY] Versuch {retry + 1}/{MAX_SCRAPE_RETRIES}. Warte {delay / 1000}s...");
                         await Task.Delay(delay);
                     }
 
@@ -749,10 +245,8 @@ namespace Tracker
                     response.EnsureSuccessStatusCode();
                     string htmlContent = await response.Content.ReadAsStringAsync();
 
-                    // Simplified Splitting Logic 
                     string[] rawTokens = htmlContent.Split(new string[] { "<a href=\"/?word=" }, StringSplitOptions.RemoveEmptyEntries);
 
-                    // Process tokens and apply limit
                     var uniqueWords = new HashSet<string>();
                     foreach (string token in rawTokens)
                     {
@@ -765,97 +259,238 @@ namespace Tracker
                             }
                         }
                     }
-                    // Success, break retry loop
                     return words.Skip(6).Take(limit).ToList();
-
                 }
                 catch (Exception ex)
                 {
                     if (retry == MAX_SCRAPE_RETRIES - 1)
                     {
-                        // Final failure: Log error and break to simulated words fallback
-                        Console.WriteLine($"[SCRAPE FAILED] All {MAX_SCRAPE_RETRIES} attempts failed. Error: {ex.Message}");
+                        Console.WriteLine($"[SCRAPE FAILED] Alle {MAX_SCRAPE_RETRIES} Versuche fehlgeschlagen. Fehler: {ex.Message}");
                         break;
                     }
                 }
             }
-
-            // Fallback to simulated words if all network attempts fail
-            Console.WriteLine("[SCRAPE FALLBACK] Using simulated words for this cycle.");
-            words = new List<string> {
-                $"SimW{IdManager.Id + 1}", $"SimW{IdManager.Id + 2}", $"SimW{IdManager.Id + 3}",
-                $"SimW{IdManager.Id + 4}", $"SimW{IdManager.Id + 5}", $"SimW{IdManager.Id + 6}",
-                $"SimW{IdManager.Id + 7}", $"SimW{IdManager.Id + 8}", $"SimW{IdManager.Id + 9}"
-            };
-
-            // Return only the required limit of words, skipping the first few simulated ones
-            return words.Skip(6).Take(limit).ToList();
+            // Fallback: Simulierte Wörter
+            return GenerateMockWords(limit);
         }
 
-        /// <summary>
-        /// Attempts to cancel the running loop.
-        /// </summary>
-        public void Stop()
+        private void RecalculateSubpatterns()
         {
-            cts.Cancel();
+            _subpatterns.Clear();
+            int n = _totalPattern.Sequence.Count;
+            for (int i = 1; i < (1 << Math.Min(n, 20)); i++)
+            {
+                var p = new Pattern();
+                for (int j = 0; j < Math.Min(n, 20); j++)
+                    p.Sequence.Add((i & (1 << j)) != 0 ? _totalPattern.Sequence[j] : -1);
+                while (p.Sequence.Count < MaxPatternLength)
+                    p.Sequence.Add(-1);
+                _subpatterns.Add(p);
+            }
+        }
+
+        private List<string> TranslateIdsToWords(IEnumerable<int> ids)
+        {
+            var idToWord = _wordToId.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+            var words = new List<string>();
+            foreach (var id in ids)
+            {
+                if (idToWord.TryGetValue(id, out var word))
+                    words.Add(word);
+                else
+                    words.Add($"[Unbekannt:{id}]");
+            }
+            return words;
         }
     }
 
-    // Console Application Entry Point
     class Program
     {
         static async Task Main(string[] args)
         {
-            Console.Title = "CQH-TED Console Tracker Engine";
-            Console.WriteLine("CQH-TED Console Tracker Engine Initialized (MAX CAPACITY MODE).");
+            Console.WriteLine("CQH-TED Tracker Engine gestartet.");
+            Console.Write("Modus wählen: (S)crape oder (G)enerate: ");
+            var mode = Console.ReadLine()?.Trim().ToUpperInvariant();
+            bool scraping = mode != "G";
+            string url = "";
 
-            bool isScrapingMode = true;
-            string inputUrl = "https://example.com";
-
-            Console.Write("Choose Mode: (S)crape URL or (G)enerate Pattern Tree: ");
-            string modeChoice = Console.ReadLine()?.Trim().ToUpperInvariant();
-
-            if (modeChoice == "G")
+            if (scraping)
             {
-                isScrapingMode = false;
-                Console.WriteLine("\n[MODE] Starting in Pattern Generation Mode (G).");
-            }
-            else
-            {
-                Console.WriteLine("\n[MODE] Starting in Web Scraping Mode (S).");
-                Console.Write("Enter Target URL (or press Enter for default 'https://example.com'): ");
-                inputUrl = Console.ReadLine();
-                if (string.IsNullOrWhiteSpace(inputUrl))
+                Console.Write("Bitte geben Sie die URL zum Scrapen ein: ");
+                url = Console.ReadLine()?.Trim();
+                if (string.IsNullOrWhiteSpace(url))
                 {
-                    inputUrl = "https://example.com";
+                    Console.WriteLine("Keine URL eingegeben. Standard-URL wird verwendet.");
+                    url = "https://example.com";
                 }
             }
 
-            var engine = new TrackerEngine(inputUrl, isScrapingMode);
-            var cts = engine.cts;
+            var engine = new TrackerEngine(url, scraping);
+            var task = engine.RunAsync(engine.Cancellation.Token);
 
-            // Start the main loop task
-            var engineTask = engine.ContinuousReverseEngineeringLoopAsync(cts.Token);
-
-            Console.WriteLine("\nEngine running. Type 'STOP' and press Enter to halt the engine.\n");
-
-            // Wait for user input to stop the engine
-            await Task.Run(() =>
+            Console.WriteLine("Geben Sie 'STOP' ein, um zu beenden.");
+            while (true)
             {
-                while (!cts.IsCancellationRequested)
+                if (Console.ReadLine()?.Trim().ToUpperInvariant() == "STOP")
                 {
-                    string command = Console.ReadLine()?.Trim().ToUpperInvariant();
-                    if (command == "STOP")
-                    {
-                        engine.Stop();
-                        break;
-                    }
+                    engine.Cancellation.Cancel();
+                    break;
                 }
-            });
-
-            // Wait for the engine task to finish its clean up
-            await engineTask;
-            Console.WriteLine("Application exit successful.");
+            }
+            await task;
+            Console.WriteLine("Beendet.");
         }
     }
 }
+
+
+namespace Tracker.nn
+{
+    public class IO
+    {
+        public int[] IOVECTOR { get; set; }
+    }
+
+    public class MainProcessor
+    {
+        public List<IO> inputseries = new();
+        public List<IO> outputseries = new();
+        public Dictionary<int, bool> Switches { get; private set; } = new();
+
+        private void Log(string msg, ConsoleColor color = ConsoleColor.Gray)
+        {
+            var oldColor = Console.ForegroundColor;
+            Console.ForegroundColor = color;
+            Console.WriteLine($"[MainProcessor] {msg}");
+            Console.ForegroundColor = oldColor;
+        }
+
+        public void InitializeSwitches(IEnumerable<int> wordIds)
+        {
+            Switches = wordIds.ToDictionary(id => id, id => false);
+            Log($"Switches initialisiert: {string.Join(", ", Switches.Keys)}", ConsoleColor.Cyan);
+        }
+
+        public void UpdateSwitches(int[] inputPattern)
+        {
+            foreach (var id in Switches.Keys.ToList())
+                Switches[id] = inputPattern.Contains(id);
+            Log("Switches aktualisiert.", ConsoleColor.Yellow);
+        }
+
+        public void DisplaySwitches(Dictionary<int, string> idToWord = null)
+        {
+            Console.WriteLine("Aktueller Switch-Zustand:");
+            foreach (var kvp in Switches)
+            {
+                string word = idToWord != null && idToWord.TryGetValue(kvp.Key, out var w) ? w : kvp.Key.ToString();
+                var color = kvp.Value ? ConsoleColor.Green : ConsoleColor.Red;
+                var oldColor = Console.ForegroundColor;
+                Console.ForegroundColor = color;
+                Console.WriteLine($"Wort-ID {kvp.Key} ({word}): {(kvp.Value ? "AN" : "AUS")}");
+                Console.ForegroundColor = oldColor;
+            }
+        }
+
+        public void AddInput(IO io)
+        {
+            if (io == null || io.IOVECTOR == null)
+            {
+                Log("Ungültiges IO-Objekt übergeben!", ConsoleColor.Red);
+                return;
+            }
+            inputseries.Add(io);
+            Log($"Neues IO hinzugefügt: [{string.Join(", ", io.IOVECTOR)}]", ConsoleColor.Magenta);
+        }
+
+        public void BruteForceCombinatorially(bool bruteForceContext, int partnerId, Dictionary<int, string> idToWord = null)
+        {
+            if (!bruteForceContext || Switches.Count == 0)
+            {
+                Log("Brute-Force-Kontext nicht aktiviert oder keine Switches vorhanden.", ConsoleColor.Red);
+                return;
+            }
+
+            Log("Brute-Force-Suche nach Switch-Triggern:", ConsoleColor.Blue);
+            foreach (var switchId in Switches.Keys)
+            {
+                string word = idToWord != null && idToWord.TryGetValue(switchId, out var w) ? w : switchId.ToString();
+                var matchingPatterns = inputseries.Where(io => io.IOVECTOR.Contains(switchId)).ToList();
+
+                if (matchingPatterns.Count > 0)
+                {
+                    Log($"Switch für Wort-ID {switchId} ({word}) wird durch {matchingPatterns.Count} Pattern(s) aktiviert:", ConsoleColor.Green);
+                    foreach (var io in matchingPatterns)
+                    {
+                        Log($"  Pattern: [{string.Join(", ", io.IOVECTOR)}]", ConsoleColor.DarkGreen);
+                    }
+                }
+                else
+                {
+                    Log($"Switch für Wort-ID {switchId} ({word}) wurde durch kein Pattern aktiviert.", ConsoleColor.Red);
+                }
+            }
+            Log("Brute-Force-Suche abgeschlossen.\n", ConsoleColor.Blue);
+        }
+
+        public void InitializeSwitches(int numDimensions, int numContexts, int numTimes, int maxPatternLength)
+        {
+            // Initialisierungscode hier
+        }
+
+        public int GetPossibilitySpaceCount(IO input, bool bruteForceContext, int partnerId)
+        {
+            // Erkennungscode hier
+            return 0;
+        }
+
+        public int GetStoredPatternCount()
+        {
+            return inputseries.Count;
+        }
+
+        public IEnumerable<int> GetRecognizedPatternSums()
+        {
+            return inputseries.Select(io => io.IOVECTOR.Where(id => id > 0).Sum());
+        }
+
+        public IO GenerateKnownPattern(int partnerId)
+        {
+            return inputseries.FirstOrDefault() ?? new IO { IOVECTOR = new int[0] };
+        }
+
+        public bool HasKnownPatterns()
+        {
+            return inputseries.Any();
+        }
+
+        public bool IsPatternRecognizedTimeInvariant(int[] pattern)
+        {
+            // Zeitinvariante Erkennung
+            return false;
+        }
+    }
+}
+
+
+public class NoiseFilter : PatternFilter
+{
+    private readonly int noiseLevel;
+    private readonly Random random = new();
+
+    public NoiseFilter(int noiseLevel = 1)
+    {
+        this.noiseLevel = noiseLevel;
+    }
+
+    public override IO Apply(IO input)
+    {
+        var output = new IO { IOVECTOR = new int[input.IOVECTOR.Length] };
+        for (int i = 0; i < input.IOVECTOR.Length; i++)
+        {
+            output.IOVECTOR[i] = input.IOVECTOR[i] + random.Next(-noiseLevel, noiseLevel + 1);
+        }
+        return output;
+    }
+}
+
