@@ -72,7 +72,7 @@ namespace Tracker
 
         private void LoadExampleData()
         {
-            // Beispielwörter und IDs
+            // Beispielwï¿½rter und IDs
             var words = new[] { "A", "B", "C", "D" };
             foreach (var word in words)
             {
@@ -156,16 +156,5 @@ namespace Tracker
                 subpatterns.Add(p);
             }
         }
-    }
-
-    public static class IdManager
-    {
-        private static int _id = 1;
-        public static int GetId() => _id++;
-    }
-
-    public class Pattern
-    {
-        public List<int> Sequence { get; } = new();
     }
 }
